@@ -12,7 +12,7 @@ echo ">>> Working in: $YOCTO_DIR"
 echo ">>> Release: $RELEASE"
 echo ">>> CPUs: $NCPU"
 
-# --- Clone Yocto layers ---
+# --- Clone Yocto layers (HTTPS — git:// often blocked on cloud VMs) ---
 clone_layer() {
     local url=$1 dir=$2 branch=$3
     if [ ! -d "$dir/.git" ]; then
@@ -24,9 +24,9 @@ clone_layer() {
     cd "$YOCTO_DIR"
 }
 
-clone_layer "git://git.yoctoproject.org/poky" "$YOCTO_DIR/poky" "$RELEASE"
-clone_layer "git://git.yoctoproject.org/meta-raspberrypi" "$YOCTO_DIR/meta-raspberrypi" "$RELEASE"
-clone_layer "git://git.openembedded.org/meta-openembedded" "$YOCTO_DIR/meta-openembedded" "$RELEASE"
+clone_layer "https://git.yoctoproject.org/poky" "$YOCTO_DIR/poky" "$RELEASE"
+clone_layer "https://git.yoctoproject.org/meta-raspberrypi" "$YOCTO_DIR/meta-raspberrypi" "$RELEASE"
+clone_layer "https://github.com/openembedded/meta-openembedded.git" "$YOCTO_DIR/meta-openembedded" "$RELEASE"
 
 # --- Init build environment ---
 echo ">>> Initializing build environment..."

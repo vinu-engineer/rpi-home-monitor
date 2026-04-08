@@ -5,6 +5,7 @@ meta-openembedded/
 
 # Build output
 build/
+build-zero2w/
 
 # Large caches
 downloads/

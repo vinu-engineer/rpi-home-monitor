@@ -1,11 +1,28 @@
-# Yocto build artifacts (these live on the VM, not in git)
+# Yocto upstream layers (cloned by setup script)
 poky/
 meta-raspberrypi/
 meta-openembedded/
+
+# Build output
 build/
+
+# Large caches
 downloads/
 sstate-cache/
-tmp/
+
+# Images
 *.wic
 *.wic.bz2
+*.wic.gz
 *.bmap
+*.sdimg
+
+# Editor
+*.swp
+*.swo
+*~
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db

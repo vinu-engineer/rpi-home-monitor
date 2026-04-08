@@ -1,0 +1,11 @@
+# Yocto build artifacts (these live on the VM, not in git)
+poky/
+meta-raspberrypi/
+meta-openembedded/
+build/
+downloads/
+sstate-cache/
+tmp/
+*.wic
+*.wic.bz2
+*.bmap

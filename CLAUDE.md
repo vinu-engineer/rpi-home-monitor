@@ -3,32 +3,40 @@
 ## What This Is
 
 A self-hosted home security camera system (like Tapo/Ring but open-source, no cloud fees).
-Built on Raspberry Pi hardware running custom Yocto Linux.
+Built on Raspberry Pi hardware running **Home Monitor OS** — a custom Yocto Linux distribution.
 
 ## Architecture
 
 - **RPi 4 Model B** = Home server. Receives camera streams, records 3-min clips, serves web dashboard.
-- **RPi Zero 2W + PiHut ZeroCam** = Camera nodes. One per location. Streams video to server over WiFi via RTSPS.
+- **RPi Zero 2W + PiHut ZeroCam** = Camera nodes. One per location. Streams video to server via RTSPS.
 - **Mobile Web UI** = Dashboard accessed from phone/laptop over HTTPS.
 
 Two separate applications in `app/`:
 - `app/server/` = Flask web app (monitor-server) — runs on RPi 4B
 - `app/camera/` = Python streaming service (camera-streamer) — runs on Zero 2W
 
-Yocto layer in `meta-home-monitor/` packages the apps into bootable images.
+## Custom Distro: `home-monitor`
+
+We do NOT use `DISTRO = "poky"` (the reference distro). We have our own:
+- **Distro config:** `meta-home-monitor/conf/distro/home-monitor.conf`
+- **Controls:** systemd, usrmerge, WiFi, seccomp, PAM, licensing, version pinning
+- **local.conf is minimal** — only machine-specific hardware settings
+- **Dev vs Prod images** — dev has debug-tweaks + root; prod is hardened
 
 ## Key Technical Decisions
 
-- **TLS everywhere from Phase 1** — HTTPS for web, RTSPS (mTLS) for cameras. Self-signed local CA.
-- **LUKS encrypted /data partition** — recordings, config, certs all encrypted at rest.
-- **nftables firewall** — minimal open ports, cameras can only talk to server.
-- **swupdate A/B partitions** — atomic OTA with rollback.
-- **3-minute MP4 clips** (Tapo-style) — stored per camera per date.
-- **JSON files for data** (no database) — cameras.json, users.json, settings.json.
-- **Avahi/mDNS** for camera auto-discovery on LAN.
-- **HLS** for live view in mobile browsers.
-- **bcrypt + CSRF + rate limiting** for web auth.
-- **Audit logging** for security events.
+- **Custom distro** — all system policy in `home-monitor.conf`, not scattered in local.conf
+- **Packagegroups** — logical package bundles (base, video, web, security, camera-video)
+- **Dev/Prod image variants** — dev for development, prod for real devices
+- **TLS everywhere from Phase 1** — HTTPS for web, RTSPS (mTLS) for cameras
+- **LUKS encrypted /data partition** — recordings, config, certs all encrypted at rest
+- **nftables firewall** — minimal open ports, cameras can only talk to server
+- **swupdate A/B partitions** — atomic OTA with rollback
+- **3-minute MP4 clips** (Tapo-style) — stored per camera per date
+- **JSON files for data** (no database) — cameras.json, users.json, settings.json
+- **Avahi/mDNS** for camera auto-discovery on LAN
+- **HLS** for live view in mobile browsers
+- **OS branding** — `/etc/os-release` shows "Home Monitor OS"
 
 ## Phases
 
@@ -39,12 +47,34 @@ Yocto layer in `meta-home-monitor/` packages the apps into bootable images.
 ## Repository Layout
 
 ```
-app/server/          — Server Flask application (developed independently of Yocto)
+app/server/          — Server Flask application
 app/camera/          — Camera streamer application
-meta-home-monitor/   — Yocto layer (recipes, image configs, partition layouts)
-config/              — Yocto build configs (bblayers.conf, per-machine local.conf)
+meta-home-monitor/   — Custom Yocto layer
+  conf/distro/       — Custom distro definition (home-monitor.conf)
+  classes/           — Shared bbclass files
+  recipes-core/
+    images/          — Dev and prod image variants (.inc + .bb)
+    packagegroups/   — Logical package bundles
+    base-files/      — OS branding (/etc/os-release)
+  recipes-monitor/   — Server app recipe
+  recipes-camera/    — Camera app recipe
+  recipes-security/  — TLS cert generation
+  wic/               — A/B partition layouts
+config/              — Yocto build configs (minimal local.conf per machine)
 scripts/             — Build, setup, and signing scripts
 docs/                — requirements.md, architecture.md
+```
+
+## Build Commands
+
+```bash
+# Development images (debug-tweaks, root SSH, dev tools)
+./scripts/build.sh server-dev
+./scripts/build.sh camera-dev
+
+# Production images (hardened, no root, no debug)
+./scripts/build.sh server-prod
+./scripts/build.sh camera-prod
 ```
 
 ## Development Workflow
@@ -57,7 +87,7 @@ ssh root@<rpi4b-ip> systemctl restart monitor
 
 **Full image rebuild (OS/package changes):**
 ```bash
-./scripts/build.sh server   # or camera, or all
+./scripts/build.sh server-dev
 ```
 
 ## Build VM
@@ -66,8 +96,3 @@ ssh root@<rpi4b-ip> systemctl restart monitor
 - User: vinu_emailme
 - Access: `ssh vinu_emailme@35.230.155.87`
 - Repo on VM: `~/yocto/`
-
-## Docs
-
-- `docs/requirements.md` — User needs, software requirements, security requirements, API spec
-- `docs/architecture.md` — Software architecture, security design, threat model, data model, partition layout

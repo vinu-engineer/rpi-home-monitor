@@ -1,6 +1,7 @@
 # RPi Home Monitor
 
-A self-hosted home security camera system built on Raspberry Pi.
+A self-hosted home security camera system built on Raspberry Pi,
+running **Home Monitor OS** — a custom Yocto Linux distribution.
 Like Tapo/Ring but open-source, no cloud subscriptions, no vendor lock-in.
 
 ## System Overview
@@ -19,64 +20,59 @@ RPi Zero 2W + ZeroCam             RPi 4 Model B (Server)            Phone
 ```
 rpi-home-monitor/
 │
-├── app/                               APPLICATION CODE
-│   ├── server/                        RPi 4B server (Flask web app)
-│   │   ├── monitor/                   Python package
-│   │   │   ├── __init__.py            App factory
-│   │   │   ├── auth.py               Login, sessions, CSRF
-│   │   │   ├── models.py             Camera, User, Settings, Clip
-│   │   │   ├── api/                   REST API blueprints
-│   │   │   │   ├── cameras.py        Camera CRUD + discovery
-│   │   │   │   ├── recordings.py     Clip listing + timeline
-│   │   │   │   ├── live.py           HLS streaming
-│   │   │   │   ├── system.py         Health + storage
-│   │   │   │   ├── settings.py       Config management
-│   │   │   │   ├── users.py          User management
-│   │   │   │   └── ota.py            OTA updates
-│   │   │   ├── services/             Background services
-│   │   │   │   ├── recorder.py       ffmpeg clip recording
-│   │   │   │   ├── discovery.py      mDNS camera scanner
-│   │   │   │   ├── storage.py        Loop recording + cleanup
-│   │   │   │   ├── health.py         CPU/temp/RAM/disk
-│   │   │   │   └── audit.py          Security event logging
-│   │   │   ├── templates/            Web UI (Jinja2)
-│   │   │   └── static/               CSS + JS
-│   │   └── config/                    systemd, nginx, nftables, logrotate
-│   │
-│   └── camera/                        RPi Zero 2W (streaming service)
-│       ├── camera_streamer/           Python package
-│       │   ├── main.py               Entry point
-│       │   ├── capture.py            v4l2 device management
-│       │   ├── stream.py             ffmpeg RTSPS + reconnect
-│       │   ├── discovery.py          mDNS advertisement
-│       │   ├── config.py             Config management
-│       │   ├── pairing.py            Certificate exchange
-│       │   └── ota_agent.py          Accept OTA pushes
-│       └── config/                    systemd, nftables, default config
+├── app/                                    APPLICATION CODE
+│   ├── server/                             RPi 4B (Flask web app)
+│   │   ├── monitor/                        Python package
+│   │   │   ├── api/                        REST API blueprints
+│   │   │   ├── services/                   Background services
+│   │   │   ├── templates/                  Web UI (Jinja2)
+│   │   │   └── static/                     CSS + JS
+│   │   └── config/                         systemd, nginx, nftables
+│   └── camera/                             RPi Zero 2W (streaming)
+│       ├── camera_streamer/                Python package
+│       └── config/                         systemd, nftables
 │
-├── meta-home-monitor/                 YOCTO LAYER
-│   ├── conf/layer.conf
-│   ├── recipes-core/images/           Image recipes (server + camera)
-│   ├── recipes-monitor/               Packages app/server/ into image
-│   ├── recipes-camera/                Packages app/camera/ into image
-│   ├── recipes-security/              TLS cert generation (first boot)
-│   └── wic/                           A/B partition layouts (OTA-ready)
+├── meta-home-monitor/                      CUSTOM YOCTO LAYER
+│   ├── conf/
+│   │   ├── layer.conf                      Layer definition
+│   │   └── distro/
+│   │       └── home-monitor.conf           Custom distro (replaces poky)
+│   ├── classes/
+│   │   └── monitor-image.bbclass           Shared image config
+│   ├── recipes-core/
+│   │   ├── images/
+│   │   │   ├── home-monitor-image.inc      Shared server packages
+│   │   │   ├── home-monitor-image-dev.bb   Server dev (debug, root SSH)
+│   │   │   ├── home-monitor-image-prod.bb  Server prod (hardened)
+│   │   │   ├── home-camera-image.inc       Shared camera packages
+│   │   │   ├── home-camera-image-dev.bb    Camera dev
+│   │   │   └── home-camera-image-prod.bb   Camera prod
+│   │   ├── packagegroups/
+│   │   │   ├── packagegroup-monitor-base.bb       Boot, SSH, networking
+│   │   │   ├── packagegroup-monitor-video.bb      ffmpeg, gstreamer, v4l
+│   │   │   ├── packagegroup-monitor-web.bb        nginx, flask, python
+│   │   │   ├── packagegroup-monitor-security.bb   openssl, nftables, LUKS
+│   │   │   └── packagegroup-camera-video.bb       ffmpeg, libcamera, v4l
+│   │   └── base-files/
+│   │       └── base-files_%.bbappend       OS branding (/etc/os-release)
+│   ├── recipes-monitor/                    Server app recipe
+│   ├── recipes-camera/                     Camera app recipe
+│   ├── recipes-security/                   TLS cert generation
+│   └── wic/                                A/B partition layouts
 │
-├── config/                            YOCTO BUILD CONFIGS
-│   ├── bblayers.conf                  Shared layer config
-│   ├── rpi4b/local.conf               Server build config
-│   └── zero2w/local.conf              Camera build config
+├── config/                                 YOCTO BUILD CONFIGS
+│   ├── bblayers.conf                       Shared layer config
+│   ├── rpi4b/local.conf                    Server (minimal, hw only)
+│   └── zero2w/local.conf                   Camera (minimal, hw only)
 │
-├── scripts/                           BUILD SCRIPTS
-│   ├── setup-env.sh                   One-time host setup
-│   ├── build.sh                       Build server/camera/all
-│   └── sign-image.sh                  Sign OTA images (Ed25519)
+├── scripts/
+│   ├── setup-env.sh                        One-time host setup
+│   ├── build.sh                            Build dev/prod images
+│   └── sign-image.sh                       Sign OTA images
 │
-├── docs/                              DOCUMENTATION
-│   ├── requirements.md                User needs + SW/security requirements
-│   └── architecture.md                Software + security architecture
-│
-└── CLAUDE.md                          Project context
+└── docs/
+    ├── requirements.md                     Requirements + security spec
+    └── architecture.md                     Software + security architecture
 ```
 
 ## Quick Start
@@ -95,52 +91,89 @@ sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0  # Ubuntu 24.04
 ### 2. Build images
 
 ```bash
-./scripts/build.sh server    # RPi 4B server image
-./scripts/build.sh camera    # RPi Zero 2W camera image
-./scripts/build.sh all       # Both
+# Development images (debug-tweaks, root SSH, dev tools)
+./scripts/build.sh server-dev      # RPi 4B
+./scripts/build.sh camera-dev      # RPi Zero 2W
+
+# Production images (hardened, no root password, no debug)
+./scripts/build.sh server-prod     # RPi 4B
+./scripts/build.sh camera-prod     # RPi Zero 2W
+
+# Both boards
+./scripts/build.sh all-dev
+./scripts/build.sh all-prod
 ```
+
+First build takes 2-4 hours. Second board is much faster (shared sstate-cache).
 
 ### 3. Find images
 
-| Board | Image |
-|-------|-------|
-| RPi 4B | `build/tmp/deploy/images/raspberrypi4-64/home-monitor-image-*.wic.bz2` |
-| Zero 2W | `build-zero2w/tmp/deploy/images/raspberrypi0-2w-64/home-camera-image-*.wic.bz2` |
+| Target | Image location |
+|--------|---------------|
+| server-dev | `build/tmp/deploy/images/raspberrypi4-64/home-monitor-image-dev-*.wic.bz2` |
+| server-prod | `build/tmp/deploy/images/raspberrypi4-64/home-monitor-image-prod-*.wic.bz2` |
+| camera-dev | `build-zero2w/tmp/deploy/images/raspberrypi0-2w-64/home-camera-image-dev-*.wic.bz2` |
+| camera-prod | `build-zero2w/tmp/deploy/images/raspberrypi0-2w-64/home-camera-image-prod-*.wic.bz2` |
 
 Or download pre-built from [GitHub Releases](https://github.com/vinu-engineer/rpi-home-monitor/releases).
 
 ### 4. Flash to SD card
 
 ```bash
-bzcat home-monitor-image-*.wic.bz2 | sudo dd of=/dev/sdX bs=4M status=progress
-bzcat home-camera-image-*.wic.bz2 | sudo dd of=/dev/sdY bs=4M status=progress
+bzcat home-monitor-image-dev-*.wic.bz2 | sudo dd of=/dev/sdX bs=4M status=progress
 ```
 
 Windows: decompress with 7-Zip, flash with [balenaEtcher](https://etcher.balena.io/).
 
+## Custom Distro: `home-monitor`
+
+We use a **custom distribution** instead of the reference `poky` distro. This is industry best practice for product development.
+
+**What the distro controls** (in `meta-home-monitor/conf/distro/home-monitor.conf`):
+- Init system: systemd (not sysvinit)
+- Core features: usrmerge, WiFi, seccomp, PAM, zeroconf
+- Package format: deb
+- License policy: commercial + firmware blobs accepted
+- Version pinning: kernel 6.6.x, Python 3.12.x, OpenSSL 3.5.x
+- Build settings: SPDX license manifests, rm_work
+
+**What local.conf controls** (machine-specific only):
+- `MACHINE` — which board to build for
+- `GPU_MEM` — GPU memory split
+- `MACHINE_EXTRA_RRECOMMENDS` — WiFi firmware for specific chip
+- CPU threads for parallel build
+
+This separation means local.conf is portable — swap the MACHINE line and everything else stays correct.
+
+## Dev vs Production Images
+
+| Feature | Dev Image | Prod Image |
+|---------|-----------|------------|
+| Root login | Yes (no password) | No (locked) |
+| SSH | Root SSH open | Key-only SSH |
+| Debug tools | gdb, strace, tcpdump | None |
+| debug-tweaks | Enabled | Disabled |
+| First-boot wizard | Skipped | Required |
+| Use case | Development, testing | Real devices |
+
 ## Development Workflow
 
-### Fast iteration (app changes — seconds, not hours)
+### Fast iteration (app changes — seconds)
 
 ```bash
-# Edit app code locally, then rsync to running device
 rsync -av app/server/monitor/ root@<rpi4b-ip>:/opt/monitor/monitor/
 ssh root@<rpi4b-ip> systemctl restart monitor
-
-# Camera app
-rsync -av app/camera/camera_streamer/ root@<zero2w-ip>:/opt/camera/camera_streamer/
-ssh root@<zero2w-ip> systemctl restart camera-streamer
 ```
 
-### Full image rebuild (OS or package changes)
+### Full image rebuild (OS/package changes)
 
 ```bash
-./scripts/build.sh server   # or camera, or all
+./scripts/build.sh server-dev
 ```
 
 ## Multi-Machine Build
 
-Both boards share the same Yocto layers and `bblayers.conf`. Only `local.conf` differs:
+Both boards share `bblayers.conf` and the `home-monitor` distro. Only `local.conf` differs:
 
 ```
 config/bblayers.conf        shared (identical layers for both)
@@ -148,46 +181,44 @@ config/rpi4b/local.conf     MACHINE="raspberrypi4-64", GPU_MEM=128
 config/zero2w/local.conf    MACHINE="raspberrypi0-2w-64", GPU_MEM=64
 ```
 
-Shared `downloads/` and `sstate-cache/` — second board build is much faster.
+Shared `downloads/` and `sstate-cache/` — the second board reuses most compiled artifacts.
 
 ## Security
 
-This is a home camera system — security is critical:
-
 - **TLS everywhere** — HTTPS for web, RTSPS with mTLS for cameras
-- **Encrypted storage** — LUKS2 on /data partition (recordings, config, certs)
+- **Encrypted storage** — LUKS2 on /data partition
 - **Firewall** — nftables, minimal ports, cameras only talk to server
-- **No default passwords** — first-boot wizard forces account creation
+- **No default passwords** — prod images require first-boot setup
 - **Camera pairing** — mTLS client certs, rogue cameras rejected
 - **Signed OTA** — Ed25519 signed firmware updates
 - **Audit logging** — all security events logged
 
-See [docs/architecture.md](docs/architecture.md) for full threat model and security design.
+See [docs/architecture.md](docs/architecture.md) for full threat model.
 
 ## Useful Commands
 
 ```bash
-# Yocto build environment
+# Build environments
 source poky/oe-init-build-env build          # server
 source poky/oe-init-build-env build-zero2w   # camera
 
 # Rebuild specific packages
-bitbake monitor-server -c cleansstate && bitbake home-monitor-image
-bitbake camera-streamer -c cleansstate && bitbake home-camera-image
+bitbake monitor-server -c cleansstate && bitbake home-monitor-image-dev
+bitbake camera-streamer -c cleansstate && bitbake home-camera-image-dev
 
 # On the device
-systemctl status monitor                      # server app
-systemctl status camera-streamer              # camera app
-journalctl -u monitor -f                      # server logs
-nmcli device wifi connect "SSID" password "pass"  # WiFi
+systemctl status monitor
+journalctl -u monitor -f
+cat /etc/os-release                          # Shows "Home Monitor OS 1.0.0"
+nmcli device wifi connect "SSID" password "pass"
 ```
 
 ## Documentation
 
 | Document | Contents |
 |----------|----------|
-| [docs/requirements.md](docs/requirements.md) | User needs, software requirements, security requirements, REST API spec |
-| [docs/architecture.md](docs/architecture.md) | Software architecture, security design, threat model, data model, partition layout |
+| [docs/requirements.md](docs/requirements.md) | User needs, software requirements, security requirements, API spec |
+| [docs/architecture.md](docs/architecture.md) | Software architecture, security design, threat model, data model |
 | [CLAUDE.md](CLAUDE.md) | Project context for development |
 
 ## Phases
@@ -198,4 +229,4 @@ nmcli device wifi connect "SSID" password "pass"  # WiFi
 
 ## Tech Stack
 
-Yocto Scarthgap 5.0 LTS | Python 3 + Flask | nginx | ffmpeg | HLS | Avahi/mDNS | swupdate | LUKS2 | nftables | OpenSSL | systemd
+Home Monitor OS (Yocto Scarthgap 5.0 LTS) | Python 3 + Flask | nginx | ffmpeg | HLS | Avahi/mDNS | swupdate | LUKS2 | nftables | OpenSSL | systemd

@@ -631,24 +631,40 @@ rpi-home-monitor/
 │       ├── requirements.txt
 │       └── setup.py
 │
-├── meta-home-monitor/                 # YOCTO LAYER (OS + packaging)
+├── meta-home-monitor/                 # CUSTOM YOCTO LAYER
 │   ├── conf/
-│   │   └── layer.conf
+│   │   ├── layer.conf
+│   │   └── distro/
+│   │       └── home-monitor.conf          # Custom distro (replaces poky)
+│   ├── classes/
+│   │   └── monitor-image.bbclass          # Shared image logic
 │   ├── recipes-core/
-│   │   └── images/
-│   │       ├── home-monitor-image.bb       # Server image recipe
-│   │       └── home-camera-image.bb        # Camera image recipe
+│   │   ├── images/
+│   │   │   ├── home-monitor-image.inc     # Shared server packages
+│   │   │   ├── home-monitor-image-dev.bb  # Server dev image
+│   │   │   ├── home-monitor-image-prod.bb # Server prod image
+│   │   │   ├── home-camera-image.inc      # Shared camera packages
+│   │   │   ├── home-camera-image-dev.bb   # Camera dev image
+│   │   │   └── home-camera-image-prod.bb  # Camera prod image
+│   │   ├── packagegroups/
+│   │   │   ├── packagegroup-monitor-base.bb       # Boot, SSH, networking
+│   │   │   ├── packagegroup-monitor-video.bb      # ffmpeg, gstreamer, v4l
+│   │   │   ├── packagegroup-monitor-web.bb        # nginx, flask, python
+│   │   │   ├── packagegroup-monitor-security.bb   # openssl, nftables, LUKS
+│   │   │   └── packagegroup-camera-video.bb       # ffmpeg, libcamera, v4l
+│   │   └── base-files/
+│   │       └── base-files_%.bbappend      # OS branding (/etc/os-release)
 │   ├── recipes-monitor/
 │   │   └── monitor-server/
-│   │       └── monitor-server_1.0.bb       # Packages app/server/ into image
+│   │       └── monitor-server_1.0.bb      # Packages app/server/ into image
 │   ├── recipes-camera/
 │   │   └── camera-streamer/
-│   │       └── camera-streamer_1.0.bb      # Packages app/camera/ into image
+│   │       └── camera-streamer_1.0.bb     # Packages app/camera/ into image
 │   ├── recipes-security/
 │   │   └── monitor-certs/
-│   │       ├── monitor-certs_1.0.bb        # First-boot CA/cert generation
+│   │       ├── monitor-certs_1.0.bb       # First-boot CA/cert generation
 │   │       └── files/
-│   │           └── generate-certs.sh       # CA + server cert generator
+│   │           └── generate-certs.sh
 │   └── wic/
 │       ├── home-monitor-ab.wks            # A/B partition layout (server)
 │       └── home-camera-ab.wks             # A/B partition layout (camera)
@@ -662,7 +678,7 @@ rpi-home-monitor/
 │
 ├── scripts/                           # BUILD & UTILITY SCRIPTS
 │   ├── setup-env.sh                   # One-time host dependency install
-│   ├── build.sh                       # Yocto build (server/camera/all)
+│   ├── build.sh                       # Yocto build (dev/prod × server/camera)
 │   └── sign-image.sh                  # Sign .swu images for OTA
 │
 ├── docs/                              # DOCUMENTATION
@@ -678,12 +694,12 @@ rpi-home-monitor/
 ```
 DEVELOPMENT (fast iteration):                RELEASE (full image rebuild):
 
-  Edit app/server/monitor/app.py               ./scripts/build.sh server
-          │                                            │
-          │ rsync                                      │ bitbake
-          ▼                                            ▼
-  RPi 4B: /opt/monitor/                        .wic.bz2 image
-          │                                    (includes app + OS + security)
+  Edit app/server/monitor/app.py               ./scripts/build.sh server-dev
+          │                                    ./scripts/build.sh server-prod
+          │ rsync                                      │
+          ▼                                            │ bitbake
+  RPi 4B: /opt/monitor/                                ▼
+          │                                    .wic.bz2 image (dev or prod)
           │ systemctl restart monitor
           ▼
   Test in browser
@@ -782,6 +798,9 @@ Storage monitor (runs every 60 seconds):
 
 | Decision | Choice | Why | Alternatives Considered |
 |----------|--------|-----|------------------------|
+| Distro | Custom `home-monitor` | Product-specific policy, not reference distro | `poky` (reference only, not for products) |
+| Image variants | dev + prod | Dev has debug; prod is hardened | Single image (either too open or too locked down) |
+| Package organization | Packagegroups | Logical bundles, reusable, maintainable | Giant IMAGE_INSTALL lists (fragile) |
 | App language | Python 3 | Already in Yocto, Flask mature, fast to develop | Go (too heavy for Zero 2W Yocto), Node (npm mess) |
 | Web framework | Flask | Lightweight, fits on 2GB RPi, good for REST APIs | Django (overkill), FastAPI (async not needed) |
 | Live streaming | HLS via nginx | Works on mobile Safari (no alternatives), low latency enough | WebRTC (complex), MPEG-DASH (poor Safari support) |

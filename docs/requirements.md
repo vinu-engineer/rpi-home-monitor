@@ -183,10 +183,12 @@ As a homeowner, I want to update the software on my server and cameras without p
 
 | Item | Choice | Rationale |
 |------|--------|-----------|
-| OS base | Yocto Linux (Scarthgap 5.0 LTS) | Minimal, reproducible, custom |
+| OS | Home Monitor OS (custom Yocto distro) | Product-specific, not reference poky |
+| Yocto release | Scarthgap (5.0 LTS) | Long-term support, latest stable |
 | Init system | systemd | Service management, journald logging |
-| Kernel | linux-raspberrypi 6.6.x (aarch64) | RPi Foundation kernel, 64-bit |
+| Kernel | linux-raspberrypi 6.6.x (aarch64) | RPi Foundation kernel, 64-bit, pinned |
 | Package format | deb | Easy on-device package management |
+| Image variants | dev (debug) + prod (hardened) | Separate concerns, safe production |
 | OTA framework | swupdate (A/B partitions) | Atomic updates with rollback |
 
 ### 4.3 Video Pipeline
@@ -620,7 +622,7 @@ The architecture must support future additions without redesign:
 
 | Layer | Technology |
 |-------|-----------|
-| OS | Yocto Linux (Scarthgap 5.0 LTS, aarch64) |
+| OS | Home Monitor OS (Yocto Scarthgap 5.0 LTS, aarch64) |
 | Init | systemd |
 | Video capture | v4l2 hardware H.264 encoder |
 | Streaming protocol | RTSP over TCP (ffmpeg) |

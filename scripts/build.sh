@@ -1,17 +1,26 @@
 #!/bin/bash
 # =============================================================
 # build.sh — Clone layers, configure, and build Yocto images
+#
 # Usage:
-#   ./scripts/build.sh server    — build RPi 4B server image
-#   ./scripts/build.sh camera    — build RPi Zero 2W camera image
-#   ./scripts/build.sh all       — build both
+#   ./scripts/build.sh server-dev     — RPi 4B development image
+#   ./scripts/build.sh server-prod    — RPi 4B production image
+#   ./scripts/build.sh camera-dev     — RPi Zero 2W development image
+#   ./scripts/build.sh camera-prod    — RPi Zero 2W production image
+#   ./scripts/build.sh all-dev        — both boards, development
+#   ./scripts/build.sh all-prod       — both boards, production
+#
+# Legacy (builds dev by default):
+#   ./scripts/build.sh server
+#   ./scripts/build.sh camera
+#   ./scripts/build.sh all
 # =============================================================
 set -e
 
 YOCTO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 RELEASE="scarthgap"
 NCPU=$(nproc)
-TARGET="${1:-server}"
+TARGET="${1:-server-dev}"
 
 echo ">>> Working in: $YOCTO_DIR"
 echo ">>> Release: $RELEASE"
@@ -58,18 +67,37 @@ build_image() {
 }
 
 case "$TARGET" in
-    server)
-        build_image "RPi 4B" "$YOCTO_DIR/build" "rpi4b" "home-monitor-image"
+    server-dev|server)
+        build_image "RPi 4B" "$YOCTO_DIR/build" "rpi4b" "home-monitor-image-dev"
         ;;
-    camera)
-        build_image "RPi Zero 2W" "$YOCTO_DIR/build-zero2w" "zero2w" "home-camera-image"
+    server-prod)
+        build_image "RPi 4B" "$YOCTO_DIR/build" "rpi4b" "home-monitor-image-prod"
         ;;
-    all)
-        build_image "RPi 4B" "$YOCTO_DIR/build" "rpi4b" "home-monitor-image"
-        build_image "RPi Zero 2W" "$YOCTO_DIR/build-zero2w" "zero2w" "home-camera-image"
+    camera-dev|camera)
+        build_image "RPi Zero 2W" "$YOCTO_DIR/build-zero2w" "zero2w" "home-camera-image-dev"
+        ;;
+    camera-prod)
+        build_image "RPi Zero 2W" "$YOCTO_DIR/build-zero2w" "zero2w" "home-camera-image-prod"
+        ;;
+    all-dev|all)
+        build_image "RPi 4B" "$YOCTO_DIR/build" "rpi4b" "home-monitor-image-dev"
+        build_image "RPi Zero 2W" "$YOCTO_DIR/build-zero2w" "zero2w" "home-camera-image-dev"
+        ;;
+    all-prod)
+        build_image "RPi 4B" "$YOCTO_DIR/build" "rpi4b" "home-monitor-image-prod"
+        build_image "RPi Zero 2W" "$YOCTO_DIR/build-zero2w" "zero2w" "home-camera-image-prod"
         ;;
     *)
-        echo "Usage: $0 {server|camera|all}"
+        echo "Usage: $0 {server-dev|server-prod|camera-dev|camera-prod|all-dev|all-prod}"
+        echo ""
+        echo "  server-dev   RPi 4B development (debug-tweaks, root SSH)"
+        echo "  server-prod  RPi 4B production (hardened, no root)"
+        echo "  camera-dev   Zero 2W development"
+        echo "  camera-prod  Zero 2W production"
+        echo "  all-dev      Both boards, development"
+        echo "  all-prod     Both boards, production"
+        echo ""
+        echo "Legacy aliases: server=server-dev, camera=camera-dev, all=all-dev"
         exit 1
         ;;
 esac

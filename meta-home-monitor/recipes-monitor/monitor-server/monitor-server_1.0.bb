@@ -42,7 +42,7 @@ SYSTEMD_AUTO_ENABLE = "enable"
 
 # Create monitor system user/group
 USERADD_PACKAGES = "${PN}"
-USERADD_PARAM:${PN} = "-r -d /opt/monitor -s /bin/false -G video monitor"
+USERADD_PARAM:${PN} = "-r -d /opt/monitor -s /bin/false -g monitor -G video monitor"
 GROUPADD_PARAM:${PN} = "-r monitor"
 
 do_install() {

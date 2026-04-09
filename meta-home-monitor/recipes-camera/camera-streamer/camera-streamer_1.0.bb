@@ -38,7 +38,7 @@ SYSTEMD_AUTO_ENABLE = "enable"
 
 # Create camera system user/group
 USERADD_PACKAGES = "${PN}"
-USERADD_PARAM:${PN} = "-r -d /opt/camera -s /bin/false -G video camera"
+USERADD_PARAM:${PN} = "-r -d /opt/camera -s /bin/false -g camera -G video camera"
 GROUPADD_PARAM:${PN} = "-r camera"
 
 do_install() {

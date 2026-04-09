@@ -10,17 +10,24 @@ set -e
 
 CONN_NAME="HomeMonitor-Setup"
 IFACE="wlan0"
-HOTSPOT_IP="192.168.4.1/24"
 HOTSPOT_SSID="HomeMonitor-Setup"
 HOTSPOT_PASS="homemonitor"
 
 start_hotspot() {
     echo "Starting WiFi hotspot: ${HOTSPOT_SSID}"
 
+    # Check if WiFi interface exists
+    if ! nmcli -t -f DEVICE device status 2>/dev/null | grep -q "^${IFACE}$"; then
+        echo "WiFi interface ${IFACE} not found — skipping hotspot (ethernet-only setup)"
+        exit 0
+    fi
+
     # Remove any existing hotspot connection with this name
     nmcli connection delete "${CONN_NAME}" 2>/dev/null || true
 
-    # Create the hotspot
+    # Create the hotspot with shared mode (NetworkManager runs dnsmasq
+    # automatically for DHCP when ipv4.method=shared, so connected
+    # clients get an IP address in the 10.42.0.x range)
     nmcli connection add \
         type wifi \
         ifname "${IFACE}" \
@@ -31,14 +38,14 @@ start_hotspot() {
         wifi.band bg \
         wifi-sec.key-mgmt wpa-psk \
         wifi-sec.psk "${HOTSPOT_PASS}" \
-        ipv4.method manual \
-        ipv4.addresses "${HOTSPOT_IP}" \
-        ipv4.never-default yes
+        ipv4.method shared
 
     # Bring up the connection
     nmcli connection up "${CONN_NAME}"
 
-    echo "Hotspot active on ${IFACE} — SSID: ${HOTSPOT_SSID}, IP: ${HOTSPOT_IP}"
+    # Get the actual IP assigned (shared mode uses 10.42.0.1 by default)
+    ACTUAL_IP=$(nmcli -t -f IP4.ADDRESS dev show "${IFACE}" 2>/dev/null | head -1 | cut -d: -f2 | cut -d/ -f1)
+    echo "Hotspot active on ${IFACE} — SSID: ${HOTSPOT_SSID}, IP: ${ACTUAL_IP:-unknown}"
 }
 
 stop_hotspot() {

@@ -15,7 +15,7 @@ SRC_URI = " \
     file://mediamtx.yml \
     file://mediamtx.service \
     "
-SRC_URI[binary.sha256sum] = "FIXME_UPDATE_WITH_ACTUAL_CHECKSUM"
+SRC_URI[binary.sha256sum] = "6ae3e3d78a770ed28ae26f8e8b474387e9d44ee88d419a245e48530062bdb629"
 
 S = "${WORKDIR}"
 

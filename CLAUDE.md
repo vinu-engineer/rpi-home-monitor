@@ -112,10 +112,8 @@ ssh root@<rpi4b-ip> systemctl restart monitor
 
 ## Build VM
 
-- Host: 35.230.155.87 (GCP, europe-west2)
-- User: vinu_emailme
-- Access: `ssh vinu_emailme@35.230.155.87`
-- Repo on VM: `~/yocto/`
+Set up your own build VM following [docs/build-setup.md](docs/build-setup.md).
+The developer must provide their own VM IP and credentials — never commit these to the repo.
 
 ## Documentation
 

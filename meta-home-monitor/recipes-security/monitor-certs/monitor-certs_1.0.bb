@@ -11,7 +11,7 @@ SRC_URI = "file://generate-certs.sh"
 
 S = "${WORKDIR}"
 
-RDEPENDS:${PN} = "openssl bash"
+RDEPENDS:${PN} = "openssl"
 
 inherit systemd
 

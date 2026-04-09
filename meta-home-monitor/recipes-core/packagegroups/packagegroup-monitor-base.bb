@@ -11,6 +11,7 @@ RDEPENDS:${PN} = " \
     dhcpcd \
     iw \
     networkmanager \
+    dnsmasq \
     avahi-daemon \
     tzdata \
     htop \

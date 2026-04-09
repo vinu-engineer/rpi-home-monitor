@@ -1,6 +1,6 @@
 # RPi Home Monitor
 
-[![Tests](https://github.com/vinu-engineer/rpi-home-monitor/actions/workflows/test.yml/badge.svg)](https://github.com/vinu-engineer/rpi-home-monitor/actions/workflows/test.yml)
+[![CI](https://github.com/vinu-engineer/rpi-home-monitor/actions/workflows/test.yml/badge.svg)](https://github.com/vinu-engineer/rpi-home-monitor/actions/workflows/test.yml)
 
 A self-hosted home security camera system built on Raspberry Pi,
 running **Home Monitor OS** — a custom Yocto Linux distribution.

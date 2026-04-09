@@ -18,11 +18,24 @@ sstate-cache/
 *.bmap
 *.sdimg
 
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+
+# Testing
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+
 # Editor
 *.swp
 *.swo
 *~
 .vscode/
+.idea/
 
 # OS
 .DS_Store

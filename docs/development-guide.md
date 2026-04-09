@@ -255,6 +255,60 @@ These rules apply to ALL code, whether application or recipe:
 
 ### 3.6 Testing Rules
 
+#### Unit Testing (Mandatory)
+
+- **Every code change must include unit tests.** No PR is merged without tests for the changed code.
+- **Framework:** `pytest` for both server and camera apps.
+- **Coverage tool:** `pytest-cov` (wraps coverage.py).
+- **Minimum code coverage: 80%.** PRs that drop coverage below 80% are blocked.
+- **Target code coverage: 90%+.** Aim higher for security-critical code (auth, pairing, TLS).
+- **Test file naming:** `test_<module>.py` — mirrors the module it tests.
+- **Test location:** `app/server/tests/` and `app/camera/tests/` (never inside the package itself).
+- **Fixtures:** Shared fixtures go in `conftest.py` at the tests root.
+- **Run tests before every commit:**
+
+```bash
+# Server tests
+cd app/server
+pytest --cov=monitor --cov-report=term-missing --cov-fail-under=80
+
+# Camera tests
+cd app/camera
+pytest --cov=camera_streamer --cov-report=term-missing --cov-fail-under=80
+```
+
+#### What to Test
+
+| Layer | What to test | How |
+|-------|-------------|-----|
+| Models | Dataclass creation, serialization, defaults | Direct instantiation |
+| API endpoints | HTTP methods, status codes, response JSON, error cases | Flask test client |
+| Auth | Login, logout, session, CSRF, rate limiting, role checks | Flask test client + mocks |
+| Services | Business logic, edge cases, error handling | Unit test with mocked I/O |
+| Config | Config loading, defaults, environment overrides | Monkeypatch env vars |
+| Camera modules | Config parsing, stream lifecycle, discovery, pairing | Unit test with mocked hardware |
+
+#### What NOT to Mock
+
+- **Dataclasses and pure logic** — test these directly, no mocks needed.
+- **Flask test client** — use `app.test_client()`, don't mock HTTP.
+
+#### What to Mock
+
+- **File system** (`/data/*` paths) — use `tmp_path` fixture.
+- **External processes** (ffmpeg, libcamera) — mock `subprocess`.
+- **System calls** (CPU temp, disk usage) — mock `os`/`shutil`/`psutil`.
+- **Network** (Avahi/mDNS, RTSP) — mock socket/dbus calls.
+- **Time** — mock `datetime.now()` for deterministic tests.
+
+#### Coverage Reports
+
+- **Terminal:** `--cov-report=term-missing` shows uncovered lines.
+- **HTML:** `--cov-report=html` generates `htmlcov/` (gitignored).
+- **CI:** Coverage is checked automatically. Build fails if below 80%.
+
+#### Integration / Hardware Testing
+
 - **Test on actual hardware** before merging significant changes. QEMU doesn't have camera hardware.
 - **For app changes:** Use the rsync workflow on a dev image. Don't rebuild the full Yocto image for every code change.
 - **For recipe changes:** Full bitbake build + parse check required.

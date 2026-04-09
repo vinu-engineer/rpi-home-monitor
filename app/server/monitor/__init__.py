@@ -7,6 +7,7 @@ records video clips, and provides a mobile-friendly web dashboard.
 import os
 from flask import Flask
 
+from monitor.services.audit import AuditLogger
 from monitor.store import Store
 
 
@@ -34,8 +35,10 @@ def create_app(config=None):
     if config:
         app.config.update(config)
 
-    # Initialize data store
+    # Initialize data store and audit logger
     app.store = Store(app.config["CONFIG_DIR"])
+    logs_dir = os.path.join(app.config["DATA_DIR"], "logs")
+    app.audit = AuditLogger(logs_dir)
 
     # Register blueprints
     from monitor.api.cameras import cameras_bp

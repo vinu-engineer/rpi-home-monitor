@@ -34,10 +34,16 @@ MAX_BACKOFF = 60
 
 
 class StreamManager:
-    """Manage the ffmpeg RTSP streaming process."""
+    """Manage the ffmpeg RTSP streaming process.
 
-    def __init__(self, config):
+    Args:
+        config: ConfigManager instance.
+        camera_device: Camera device path (from Platform). Defaults to /dev/video0.
+    """
+
+    def __init__(self, config, camera_device="/dev/video0"):
         self._config = config
+        self._camera_device = camera_device
         self._process = None
         self._libcamera_proc = None
         self._running = False
@@ -168,7 +174,7 @@ class StreamManager:
             "-input_format", "h264",
             "-video_size", f"{cfg.width}x{cfg.height}",
             "-framerate", str(cfg.fps),
-            "-i", "/dev/video0",
+            "-i", self._camera_device,
             "-c:v", "copy",
             "-f", "rtsp",
             "-rtsp_transport", "tcp",
@@ -181,8 +187,9 @@ class StreamManager:
         import shutil
 
         log.info(
-            "Stream config: device=/dev/video0 resolution=%dx%d fps=%d "
+            "Stream config: device=%s resolution=%dx%d fps=%d "
             "server=%s:%s camera_id=%s",
+            self._camera_device,
             self._config.width, self._config.height, self._config.fps,
             self._config.server_ip, self._config.server_port,
             self._config.camera_id,
@@ -190,8 +197,8 @@ class StreamManager:
         log.info("RTSP target URL: %s", self._config.rtsp_url)
 
         # Check if video device exists before starting
-        if not os.path.exists("/dev/video0"):
-            log.error("/dev/video0 not found — camera not detected")
+        if not os.path.exists(self._camera_device):
+            log.error("%s not found — camera not detected", self._camera_device)
             return
 
         if not shutil.which("ffmpeg"):

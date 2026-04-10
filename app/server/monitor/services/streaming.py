@@ -163,8 +163,16 @@ class StreamingService:
         cam_rec_dir = self._recordings_dir / cam_id
         cam_rec_dir.mkdir(parents=True, exist_ok=True)
 
-        # We need a wrapper approach since ffmpeg segment muxer
-        # doesn't create subdirectories. Use a reset timer pattern.
+        # ffmpeg segment muxer can't create subdirectories, so we
+        # pre-create today's date dir and start a thread to create
+        # tomorrow's dir at midnight.
+        today = datetime.now().strftime("%Y-%m-%d")
+        today_dir = cam_rec_dir / today
+        today_dir.mkdir(parents=True, exist_ok=True)
+
+        # Start a thread that creates the next day's dir before midnight
+        self._start_dir_creator(cam_id, cam_rec_dir)
+
         cmd = [
             "ffmpeg", "-nostdin",
             "-rtsp_transport", "tcp",
@@ -185,6 +193,26 @@ class StreamingService:
             with self._lock:
                 self._rec_procs[cam_id] = proc
             log.info("Recorder started for %s (PID %d)", cam_id, proc.pid)
+
+    def _start_dir_creator(self, cam_id, rec_dir):
+        """Pre-create date directories so ffmpeg segment muxer doesn't fail at midnight."""
+        def _dir_loop():
+            while self._running and cam_id in self._rec_procs:
+                # Create today's and tomorrow's dirs
+                now = datetime.now()
+                today = now.strftime("%Y-%m-%d")
+                tomorrow = (now.replace(hour=0, minute=0, second=0) +
+                           __import__('datetime').timedelta(days=1)).strftime("%Y-%m-%d")
+                for d in [today, tomorrow]:
+                    (rec_dir / d).mkdir(parents=True, exist_ok=True)
+                # Check every 10 minutes
+                for _ in range(600):
+                    if not self._running or cam_id not in self._rec_procs:
+                        return
+                    time.sleep(1)
+
+        t = threading.Thread(target=_dir_loop, daemon=True, name=f"dirs-{cam_id}")
+        t.start()
 
     # --- Snapshot extraction ---
 

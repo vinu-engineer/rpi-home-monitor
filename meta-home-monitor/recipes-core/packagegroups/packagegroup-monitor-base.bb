@@ -8,7 +8,6 @@ RDEPENDS:${PN} = " \
     packagegroup-core-boot \
     packagegroup-core-ssh-openssh \
     wpa-supplicant \
-    dhcpcd \
     iw \
     networkmanager \
     dnsmasq \

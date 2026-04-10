@@ -104,6 +104,81 @@ class TestConfigManager:
         assert mgr.fps == 15
 
 
+class TestPasswordManagement:
+    """Test camera admin password hashing and verification."""
+
+    def test_default_username(self, data_dir):
+        """Default username should be 'admin'."""
+        mgr = ConfigManager(data_dir=str(data_dir))
+        mgr.load()
+        assert mgr.admin_username == "admin"
+
+    def test_custom_username(self, data_dir):
+        """Should support custom username."""
+        mgr = ConfigManager(data_dir=str(data_dir))
+        mgr.load()
+        mgr.update(ADMIN_USERNAME="myuser")
+        mgr2 = ConfigManager(data_dir=str(data_dir))
+        mgr2.load()
+        assert mgr2.admin_username == "myuser"
+
+    def test_no_password_by_default(self, data_dir):
+        """has_password should be False when no password is set."""
+        mgr = ConfigManager(data_dir=str(data_dir))
+        mgr.load()
+        assert mgr.has_password is False
+
+    def test_set_and_check_password(self, data_dir):
+        """Should hash password and verify it correctly."""
+        mgr = ConfigManager(data_dir=str(data_dir))
+        mgr.load()
+        mgr.set_password("mysecret123")
+        assert mgr.has_password is True
+        assert mgr.check_password("mysecret123") is True
+        assert mgr.check_password("wrong") is False
+
+    def test_password_persists_after_save_reload(self, data_dir):
+        """Password hash should survive save/reload cycle."""
+        mgr = ConfigManager(data_dir=str(data_dir))
+        mgr.load()
+        mgr.set_password("persist_test")
+        mgr.save()
+
+        mgr2 = ConfigManager(data_dir=str(data_dir))
+        mgr2.load()
+        assert mgr2.has_password is True
+        assert mgr2.check_password("persist_test") is True
+        assert mgr2.check_password("wrong") is False
+
+    def test_password_change(self, data_dir):
+        """Should be able to change password."""
+        mgr = ConfigManager(data_dir=str(data_dir))
+        mgr.load()
+        mgr.set_password("old_pw")
+        assert mgr.check_password("old_pw") is True
+
+        mgr.set_password("new_pw")
+        assert mgr.check_password("new_pw") is True
+        assert mgr.check_password("old_pw") is False
+
+    def test_check_password_empty_hash(self, data_dir):
+        """check_password should return False when no password is set."""
+        mgr = ConfigManager(data_dir=str(data_dir))
+        mgr.load()
+        assert mgr.check_password("anything") is False
+
+    def test_password_hash_format(self, data_dir):
+        """Password hash should be in salt:hash format."""
+        mgr = ConfigManager(data_dir=str(data_dir))
+        mgr.load()
+        mgr.set_password("test")
+        raw = mgr.admin_password
+        assert ":" in raw
+        salt, h = raw.split(":", 1)
+        assert len(salt) == 32  # 16 bytes hex
+        assert len(h) == 64     # sha256 hex
+
+
 class TestHardwareSerial:
     """Test hardware serial detection."""
 

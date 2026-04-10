@@ -13,7 +13,9 @@ Config values:
   FPS            - Framerate (default: 25)
   CAMERA_ID      - Derived from hardware serial if not set
 """
+import hashlib
 import os
+import secrets
 import logging
 
 log = logging.getLogger("camera-streamer.config")
@@ -27,6 +29,8 @@ DEFAULTS = {
     "HEIGHT": "1080",
     "FPS": "25",
     "CAMERA_ID": "",
+    "ADMIN_USERNAME": "admin",  # default username
+    "ADMIN_PASSWORD": "",       # salt:hash (PBKDF2-SHA256)
 }
 
 
@@ -97,6 +101,36 @@ class ConfigManager:
     @property
     def data_dir(self):
         return self._data_dir
+
+    @property
+    def admin_username(self):
+        """Return the admin username."""
+        return self._values["ADMIN_USERNAME"]
+
+    @property
+    def admin_password(self):
+        """Return the raw salt:hash string."""
+        return self._values["ADMIN_PASSWORD"]
+
+    @property
+    def has_password(self):
+        """Return True if an admin password has been set."""
+        return bool(self._values["ADMIN_PASSWORD"])
+
+    def set_password(self, plaintext):
+        """Hash and store an admin password using PBKDF2-SHA256."""
+        salt = secrets.token_hex(16)
+        h = hashlib.pbkdf2_hmac("sha256", plaintext.encode(), salt.encode(), 100000)
+        self._values["ADMIN_PASSWORD"] = f"{salt}:{h.hex()}"
+
+    def check_password(self, plaintext):
+        """Verify a password against the stored hash."""
+        stored = self._values["ADMIN_PASSWORD"]
+        if not stored or ":" not in stored:
+            return False
+        salt, expected_hash = stored.split(":", 1)
+        h = hashlib.pbkdf2_hmac("sha256", plaintext.encode(), salt.encode(), 100000)
+        return secrets.compare_digest(h.hex(), expected_hash)
 
     @property
     def is_configured(self):

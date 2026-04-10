@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Camera Status</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+       background: #1a1a2e; color: #eee; min-height: 100vh;
+       display: flex; flex-direction: column; align-items: center; }
+.container { max-width: 400px; width: 100%; padding: 20px; padding-bottom: 80px; }
+h1 { text-align: center; color: #e94560; margin: 30px 0 6px; font-size: 1.5em; }
+.cam-id { text-align: center; color: #666; font-size: 0.8em; margin-bottom: 24px; }
+.card { background: #16213e; border-radius: 12px; padding: 20px; margin: 12px 0; }
+.card h3 { margin-bottom: 12px; font-size: 1.1em; }
+.info-row { display: flex; justify-content: space-between; padding: 10px 0;
+  border-bottom: 1px solid #0f3460; }
+.info-row:last-child { border-bottom: none; }
+.info-label { color: #8090b0; font-size: 0.9em; }
+.info-value { font-weight: 500; }
+.status-ok { color: #4ade80; }
+.status-err { color: #f87171; }
+.status-warn { color: #fbbf24; }
+label { display: block; margin: 12px 0 4px; color: #8090b0; font-size: 0.85em; }
+input[type=text], input[type=password] {
+  width: 100%; padding: 12px; border: 1px solid #2a3a5e; border-radius: 8px;
+  background: #0f3460; color: #eee; font-size: 1em; outline: none; }
+input:focus { border-color: #e94560; }
+.btn { display: block; width: 100%; padding: 14px; border: none; border-radius: 10px;
+  font-size: 1em; font-weight: 600; cursor: pointer; margin-top: 14px; }
+.btn-primary { background: #e94560; color: #fff; }
+.btn-primary:hover { background: #d63851; }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-secondary { background: #0f3460; color: #b0b0c0; margin-top: 8px; }
+.btn-secondary:hover { background: #133a6a; }
+.btn-danger { background: #7f1d1d; color: #fecaca; margin-top: 8px; }
+.btn-danger:hover { background: #991b1b; }
+.btn-small { padding: 10px 16px; font-size: 0.9em; display: inline-block; width: auto; }
+.network-list { max-height: 200px; overflow-y: auto; margin: 8px 0; }
+.net { padding: 10px 12px; border-bottom: 1px solid #0f3460; cursor: pointer;
+  display: flex; justify-content: space-between; align-items: center; }
+.net:hover { background: #0f3460; border-radius: 6px; }
+.msg { text-align: center; padding: 12px; border-radius: 8px; margin: 8px 0; font-size: 0.9em; }
+.msg-ok { background: #065f46; color: #d1fae5; }
+.msg-err { background: #7f1d1d; color: #fecaca; }
+.msg-warn { background: #78350f; color: #fde68a; }
+#wifi-form, #pw-form { display: none; }
+.topbar { display: flex; justify-content: flex-end; padding: 10px 0; }
+.topbar a { color: #8090b0; font-size: 0.85em; text-decoration: none; }
+.topbar a:hover { color: #e94560; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="topbar"><a href="/logout">Logout</a></div>
+  <h1>Camera Status</h1>
+  <p class="cam-id">{{CAMERA_ID}}</p>
+  <div style="text-align:center;margin-bottom:16px;">
+    <span style="color:#4ade80;font-size:0.85em;" id="s-url">--</span>
+  </div>
+
+  <div class="card">
+    <h3>Device Info</h3>
+    <div class="info-row">
+      <span class="info-label">Hostname</span>
+      <span class="info-value" id="s-hostname">--</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">IP Address</span>
+      <span class="info-value" id="s-ip">--</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">WiFi Network</span>
+      <span class="info-value" id="s-wifi">--</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Connection Status</h3>
+    <div class="info-row">
+      <span class="info-label">Server</span>
+      <span class="info-value" id="s-server">--</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Stream</span>
+      <span class="info-value" id="s-stream">--</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>System Health</h3>
+    <div class="info-row">
+      <span class="info-label">CPU Temperature</span>
+      <span class="info-value" id="s-cpu">--</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Memory</span>
+      <span class="info-value" id="s-mem">--</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Uptime</span>
+      <span class="info-value" id="s-uptime">--</span>
+    </div>
+  </div>
+
+  <button class="btn btn-secondary" onclick="toggleWifi()">Change WiFi</button>
+
+  <div id="wifi-form">
+    <div class="card">
+      <h3>Change WiFi Network</h3>
+      <div class="msg msg-warn">Warning: Changing WiFi will briefly disconnect the camera.</div>
+      <div id="net-list" class="network-list"></div>
+      <button class="btn btn-secondary btn-small" onclick="scanNetworks()" id="btn-scan" style="margin-bottom:8px;">Scan for Networks</button>
+      <label>WiFi Name (SSID)</label>
+      <input type="text" id="in-ssid" placeholder="Network name">
+      <label>WiFi Password</label>
+      <input type="password" id="in-pass" placeholder="Password">
+      <button class="btn btn-primary" id="btn-connect" onclick="doConnect()">Connect</button>
+      <div id="wifi-result"></div>
+    </div>
+  </div>
+
+  <button class="btn btn-secondary" onclick="togglePw()" style="margin-top:12px;">Change Password</button>
+
+  <div id="pw-form">
+    <div class="card">
+      <h3>Change Camera Password</h3>
+      <label>Current Password</label>
+      <input type="password" id="pw-current" placeholder="Current password">
+      <label>New Password</label>
+      <input type="password" id="pw-new" placeholder="New password (min 4 chars)">
+      <button class="btn btn-primary" id="btn-pw" onclick="changePw()">Change Password</button>
+      <div id="pw-result"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+function $(id) { return document.getElementById(id); }
+
+function loadStatus() {
+  fetch('/api/status')
+    .then(function(r) {
+      if (r.status === 401) { window.location.href = '/login'; return null; }
+      return r.json();
+    })
+    .then(function(d) {
+      if (!d) return;
+      $('s-hostname').textContent = d.hostname || '--';
+      $('s-ip').textContent = d.ip_address || '--';
+      if (d.hostname) {
+        $('s-url').textContent = 'http://' + d.hostname + '.local';
+      }
+      $('s-wifi').textContent = d.wifi_ssid || 'Not connected';
+
+      var serverEl = $('s-server');
+      if (d.server_connected) {
+        serverEl.textContent = d.server_address + ' (connected)';
+        serverEl.className = 'info-value status-ok';
+      } else {
+        serverEl.textContent = d.server_address + ' (disconnected)';
+        serverEl.className = 'info-value status-err';
+      }
+
+      var streamEl = $('s-stream');
+      if (d.streaming) {
+        streamEl.textContent = 'Streaming';
+        streamEl.className = 'info-value status-ok';
+      } else {
+        streamEl.textContent = 'Not streaming';
+        streamEl.className = 'info-value status-err';
+      }
+
+      // System health
+      var cpuEl = $('s-cpu');
+      cpuEl.textContent = d.cpu_temp + '\u00B0C';
+      cpuEl.className = 'info-value' + (d.cpu_temp > 70 ? ' status-err' : d.cpu_temp > 60 ? ' status-warn' : ' status-ok');
+
+      var memPct = d.memory_total_mb > 0 ? Math.round(d.memory_used_mb / d.memory_total_mb * 100) : 0;
+      $('s-mem').textContent = d.memory_used_mb + ' / ' + d.memory_total_mb + ' MB (' + memPct + '%)';
+      $('s-uptime').textContent = d.uptime || '--';
+    })
+    .catch(function() {});
+}
+
+function toggleWifi() {
+  var form = $('wifi-form');
+  form.style.display = form.style.display === 'none' ? 'block' : 'none';
+}
+
+function togglePw() {
+  var form = $('pw-form');
+  form.style.display = form.style.display === 'none' ? 'block' : 'none';
+}
+
+function scanNetworks() {
+  var btn = $('btn-scan');
+  btn.disabled = true;
+  btn.textContent = 'Scanning...';
+  $('net-list').innerHTML = '';
+
+  fetch('/api/networks')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      var nets = d.networks || [];
+      var html = '';
+      nets.forEach(function(n) {
+        html += '<div class="net" onclick="pickNet(\''+esc(n.ssid)+'\')"><span>'+esc(n.ssid)+'</span><span style="color:#4ade80;font-size:0.85em">'+n.signal+'%</span></div>';
+      });
+      $('net-list').innerHTML = html || '<div class="msg" style="color:#8090b0">No networks found</div>';
+      btn.disabled = false;
+      btn.textContent = 'Scan for Networks';
+    })
+    .catch(function() {
+      btn.disabled = false;
+      btn.textContent = 'Scan for Networks';
+      $('net-list').innerHTML = '<div class="msg msg-err">Scan failed</div>';
+    });
+}
+
+function pickNet(ssid) {
+  $('in-ssid').value = ssid;
+  $('in-pass').focus();
+}
+
+function doConnect() {
+  var ssid = $('in-ssid').value.trim();
+  var pass = $('in-pass').value;
+  if (!ssid) { alert('Enter WiFi name'); return; }
+  if (!pass) { alert('Enter WiFi password'); return; }
+
+  $('btn-connect').disabled = true;
+  $('btn-connect').textContent = 'Connecting...';
+  $('wifi-result').innerHTML = '';
+
+  fetch('/api/wifi', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ssid: ssid, password: pass})
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(d) {
+    $('btn-connect').disabled = false;
+    $('btn-connect').textContent = 'Connect';
+    if (d.error) {
+      $('wifi-result').innerHTML = '<div class="msg msg-err">' + esc(d.error) + '</div>';
+    } else {
+      $('wifi-result').innerHTML = '<div class="msg msg-ok">' + esc(d.message || 'Connected!') + '</div>';
+      setTimeout(loadStatus, 2000);
+    }
+  })
+  .catch(function() {
+    $('btn-connect').disabled = false;
+    $('btn-connect').textContent = 'Connect';
+    $('wifi-result').innerHTML = '<div class="msg msg-err">Request failed. Camera may have changed networks.</div>';
+  });
+}
+
+function changePw() {
+  var current = $('pw-current').value;
+  var newPw = $('pw-new').value;
+  if (!current) { alert('Enter current password'); return; }
+  if (!newPw || newPw.length < 4) { alert('New password must be at least 4 characters'); return; }
+
+  $('btn-pw').disabled = true;
+  $('btn-pw').textContent = 'Saving...';
+  $('pw-result').innerHTML = '';
+
+  fetch('/api/password', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({current_password: current, new_password: newPw})
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(d) {
+    $('btn-pw').disabled = false;
+    $('btn-pw').textContent = 'Change Password';
+    if (d.error) {
+      $('pw-result').innerHTML = '<div class="msg msg-err">' + esc(d.error) + '</div>';
+    } else {
+      $('pw-result').innerHTML = '<div class="msg msg-ok">' + esc(d.message || 'Password changed!') + '</div>';
+      $('pw-current').value = '';
+      $('pw-new').value = '';
+    }
+  })
+  .catch(function() {
+    $('btn-pw').disabled = false;
+    $('btn-pw').textContent = 'Change Password';
+    $('pw-result').innerHTML = '<div class="msg msg-err">Request failed</div>';
+  });
+}
+
+function esc(s) {
+  var d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML.replace(/'/g, "\\'");
+}
+
+// Load on start, then refresh every 10s
+loadStatus();
+setInterval(loadStatus, 10000);
+</script>
+</body>
+</html>

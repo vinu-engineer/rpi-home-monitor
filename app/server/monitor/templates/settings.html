@@ -182,20 +182,30 @@
     var currentUser = null;
 
     function init() {
-        currentUser = window.HM.auth.getUser();
-        var isAdmin = currentUser && currentUser.role === 'admin';
+        // Must wait for auth.getMe() to complete (async in app.js)
+        // before checking user role — otherwise _user is still null
+        window.HM.auth.getMe()
+            .then(function() {
+                currentUser = window.HM.auth.getUser();
+                var isAdmin = currentUser && currentUser.role === 'admin';
 
-        if (isAdmin) {
-            document.getElementById('section-system-settings').style.display = '';
-            document.getElementById('section-user-mgmt').style.display = '';
-            document.getElementById('section-wifi').style.display = '';
-            loadSettings();
-            loadUsers();
-            loadWifi();
-        }
+                if (isAdmin) {
+                    document.getElementById('section-system-settings').style.display = '';
+                    document.getElementById('section-user-mgmt').style.display = '';
+                    document.getElementById('section-wifi').style.display = '';
+                    loadSettings();
+                    loadUsers();
+                    loadWifi();
+                }
 
-        loadSystemInfo();
-        bindEvents();
+                loadSystemInfo();
+                bindEvents();
+            })
+            .catch(function() {
+                // Not logged in — still show system info + password form
+                loadSystemInfo();
+                bindEvents();
+            });
     }
 
     /* --- System Settings --- */
@@ -218,7 +228,8 @@
         window.HM.api.get('/api/v1/system/info')
             .then(function(data) {
                 document.getElementById('sysinfo-firmware').textContent = data.firmware_version || '--';
-                document.getElementById('sysinfo-uptime').textContent = data.uptime || '--';
+                document.getElementById('sysinfo-uptime').textContent =
+                    (data.uptime && data.uptime.display) ? data.uptime.display : '--';
             })
             .catch(function() {});
 
@@ -226,11 +237,11 @@
             .then(function(data) {
                 if (data.disk) {
                     document.getElementById('sysinfo-disk-total').textContent =
-                        window.HM.formatBytes(data.disk.total || 0);
+                        (data.disk.total_gb || 0) + ' GB';
                     document.getElementById('sysinfo-disk-used').textContent =
-                        window.HM.formatBytes(data.disk.used || 0);
+                        (data.disk.used_gb || 0) + ' GB (' + (data.disk.percent || 0) + '%)';
                     document.getElementById('sysinfo-disk-free').textContent =
-                        window.HM.formatBytes(data.disk.free || 0);
+                        (data.disk.free_gb || 0) + ' GB';
                 }
             })
             .catch(function() {});

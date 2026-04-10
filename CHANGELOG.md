@@ -2,6 +2,29 @@
 
 All notable changes to RPi Home Monitor are documented here.
 
+## [v1.0.6-dev] — 2026-04-10
+
+### Added
+- **Camera password authentication** — Camera status page now requires login with username/password set during provisioning. PBKDF2-SHA256 hashing (100k iterations, random 16-byte salt). Session-based auth with HttpOnly cookies and 2-hour timeout.
+- **Camera setup collects credentials** — First-boot wizard now asks for admin username and password. These protect the camera's status/settings page.
+- **Camera `.local` URL access** — Cameras are reachable via mDNS at `http://rpi-divinu-cam-XXXX.local` (XXXX = last 4 hex of CPU serial). URL shown on:
+  - Camera status page (top of page after login)
+  - Camera setup wizard (in success message after provisioning)
+  - Server dashboard (clickable "Settings" link on each camera card)
+- **Camera system health display** — Status page shows CPU temperature, memory usage, and uptime with color-coded thresholds.
+- **Camera WiFi change** — Authenticated users can change WiFi network and password from the status page.
+- **Camera password change** — Authenticated users can change the camera admin password.
+- **25 new tests** — 8 for password management, 17 for session management, provisioning, and system helpers.
+
+### Fixed
+- **Server settings WiFi card hidden** — Race condition where `auth.getMe()` async call hadn't completed before settings `init()` checked user role. Fixed by awaiting auth before rendering admin sections.
+- **Server settings uptime "[object Object]"** — API returns `{seconds, display}` object; JS was displaying the raw object. Fixed to use `data.uptime.display`.
+- **Server settings disk "0 B"** — API returns `disk.total_gb`; JS was using `data.disk.total` (undefined). Fixed to use `total_gb`/`used_gb`/`free_gb` with correct units.
+
+### Changed
+- **Camera templates extracted** — Inline HTML (login, status, setup pages) moved from `wifi_setup.py` to separate template files in `templates/` directory. Reduces `wifi_setup.py` from 1573 to 976 lines.
+- Camera unique hostname set during first boot via CPU serial suffix for multi-device mDNS support.
+
 ## [Unreleased]
 
 ### Added
@@ -50,8 +73,9 @@ All notable changes to RPi Home Monitor are documented here.
 3. **Connect to hotspot** — On your phone, connect to WiFi `HomeCam-Setup` (password: `homecamera`).
 4. **Setup wizard opens automatically** — Your phone shows the "Sign in to network" popup. If not, open `http://10.42.0.1` in a browser.
 5. **Configure WiFi** — Select your home WiFi network, enter password.
-6. **Server address** — Leave as `homemonitor.local` (auto-discovery). Only change this if mDNS doesn't work on your network — in that case enter the server's IP address. Port: leave as `8554`.
-7. **Save & Connect** — LED switches to fast blink (connecting), then solid on (connected). The hotspot disappears. If connection fails, LED blinks rapidly and the hotspot restarts automatically for retry.
+6. **Server address** — Leave as `rpi-divinu.local` (auto-discovery). Only change this if mDNS doesn't work on your network — in that case enter the server's IP address. Port: leave as `8554`.
+7. **Set camera login** — Choose a username (default: `admin`) and password (min 4 characters). You'll need these to access the camera's settings page later.
+8. **Save & Connect** — LED switches to fast blink (connecting), then solid on (connected). The hotspot disappears. A `.local` URL is shown (e.g., `http://rpi-divinu-cam-d8ee.local`) — bookmark it for future access. If connection fails, LED blinks rapidly and the hotspot restarts automatically for retry.
 
 ### Part 3: Pair Camera on Server
 

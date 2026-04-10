@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Camera Login</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+       background: #1a1a2e; color: #eee; min-height: 100vh;
+       display: flex; flex-direction: column; align-items: center;
+       justify-content: center; }
+.container { max-width: 380px; width: 100%; padding: 20px; }
+h1 { text-align: center; color: #e94560; margin-bottom: 6px; font-size: 1.5em; }
+.cam-id { text-align: center; color: #666; font-size: 0.8em; margin-bottom: 30px; }
+.card { background: #16213e; border-radius: 12px; padding: 24px; }
+label { display: block; margin: 0 0 6px; color: #8090b0; font-size: 0.85em; }
+input[type=text], input[type=password] {
+  width: 100%; padding: 14px; border: 1px solid #2a3a5e; border-radius: 8px;
+  background: #0f3460; color: #eee; font-size: 1em; outline: none; }
+input:focus { border-color: #e94560; }
+.form-group { margin-bottom: 14px; }
+.btn { display: block; width: 100%; padding: 14px; border: none; border-radius: 10px;
+  font-size: 1em; font-weight: 600; cursor: pointer; margin-top: 16px;
+  background: #e94560; color: #fff; }
+.btn:hover { background: #d63851; }
+.error { background: #7f1d1d; color: #fecaca; padding: 10px; border-radius: 8px;
+  margin-bottom: 14px; font-size: 0.9em; text-align: center; }
+.hint { color: #506080; font-size: 0.8em; text-align: center; margin-top: 16px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Camera Login</h1>
+  <p class="cam-id">{{CAMERA_ID}}</p>
+  <div class="card">
+    <div class="error" style="display:{{ERROR_DISPLAY}}">{{ERROR}}</div>
+    <form method="POST" action="/login">
+      <div class="form-group">
+        <label for="username">Username</label>
+        <input type="text" name="username" id="username" placeholder="admin"
+               autofocus required>
+      </div>
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input type="password" name="password" id="password" placeholder="Enter password"
+               required>
+      </div>
+      <button type="submit" class="btn">Login</button>
+    </form>
+  </div>
+  <p class="hint">Credentials were set during camera setup.</p>
+</div>
+</body>
+</html>

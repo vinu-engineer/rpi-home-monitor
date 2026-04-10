@@ -1,12 +1,16 @@
 """
-WiFi setup for camera first boot.
+WiFi setup for camera first boot + authenticated status page.
 
 On first boot (when /data/.setup-done doesn't exist):
 1. Starts a WiFi hotspot "HomeCam-Setup"
 2. Runs a tiny HTTP server on port 80 with a setup page
-3. User connects, enters WiFi SSID + password + server IP on ONE page
+3. User enters WiFi SSID + password + server IP + camera password
 4. Camera saves settings, tears down hotspot, connects to home WiFi
 5. If WiFi fails, hotspot comes back up for retry
+
+After setup, port 80 serves a login-protected status page where the
+user can view camera info and change WiFi with the password they set
+during provisioning.
 
 Single-radio constraint: wlan0 can either be an AP or a client, not both.
 So we can't scan while hotspot is active. User types SSID manually or we
@@ -15,10 +19,12 @@ do a quick scan BEFORE starting the hotspot.
 import http.server
 import json
 import os
+import secrets
 import subprocess
 import threading
 import time
 import logging
+from pathlib import Path
 
 from camera_streamer import led
 
@@ -32,6 +38,33 @@ SETUP_STAMP = ".setup-done"
 LISTEN_PORT = 80
 # Seconds to wait after sending response before tearing down AP
 CONNECT_DELAY = 3
+# Session timeout in seconds (2 hours)
+SESSION_TIMEOUT = 7200
+
+
+# Template directory (adjacent to this module)
+_TEMPLATE_DIR = Path(__file__).parent / "templates"
+
+# Cache loaded templates to avoid re-reading on every request
+_template_cache = {}
+
+
+def _load_template(name):
+    """Load an HTML template from the templates/ directory.
+
+    Templates are cached in memory after first load.
+    Placeholders like {{CAMERA_ID}} are left for runtime replacement.
+    """
+    if name in _template_cache:
+        return _template_cache[name]
+    path = _TEMPLATE_DIR / name
+    try:
+        html = path.read_text(encoding="utf-8")
+    except OSError:
+        log.error("Template not found: %s", path)
+        html = f"<h1>Template Error</h1><p>Missing: {name}</p>"
+    _template_cache[name] = html
+    return html
 
 
 def is_setup_complete(data_dir):
@@ -46,6 +79,105 @@ def mark_setup_complete(data_dir):
         f.write("1\n")
 
 
+# ============================================================
+# Session store (in-memory, survives within one process lifetime)
+# ============================================================
+_sessions = {}  # token -> expiry timestamp
+_session_lock = threading.Lock()
+
+
+def _create_session():
+    """Create a new session token."""
+    token = secrets.token_hex(32)
+    with _session_lock:
+        _sessions[token] = time.time() + SESSION_TIMEOUT
+    return token
+
+
+def _check_session(token):
+    """Return True if session token is valid and not expired."""
+    if not token:
+        return False
+    with _session_lock:
+        expiry = _sessions.get(token)
+        if expiry is None:
+            return False
+        if time.time() > expiry:
+            del _sessions[token]
+            return False
+        # Refresh expiry on activity
+        _sessions[token] = time.time() + SESSION_TIMEOUT
+        return True
+
+
+def _destroy_session(token):
+    """Remove a session."""
+    if token:
+        with _session_lock:
+            _sessions.pop(token, None)
+
+
+def _get_session_cookie(headers):
+    """Extract session token from Cookie header."""
+    cookie_header = headers.get("Cookie", "")
+    for part in cookie_header.split(";"):
+        part = part.strip()
+        if part.startswith("cam_session="):
+            return part.split("=", 1)[1]
+    return ""
+
+
+# ============================================================
+# System info helpers (for status page)
+# ============================================================
+def _get_cpu_temp():
+    """Read CPU temperature in Celsius."""
+    try:
+        with open("/sys/class/thermal/thermal_zone0/temp") as f:
+            return round(int(f.read().strip()) / 1000.0, 1)
+    except (OSError, ValueError):
+        return 0.0
+
+
+def _get_uptime():
+    """Get human-readable uptime."""
+    try:
+        with open("/proc/uptime") as f:
+            seconds = int(float(f.read().split()[0]))
+    except (OSError, ValueError, IndexError):
+        seconds = 0
+    days = seconds // 86400
+    hours = (seconds % 86400) // 3600
+    minutes = (seconds % 3600) // 60
+    parts = []
+    if days:
+        parts.append(f"{days}d")
+    if hours:
+        parts.append(f"{hours}h")
+    parts.append(f"{minutes}m")
+    return " ".join(parts)
+
+
+def _get_memory_mb():
+    """Get total and used memory in MB."""
+    try:
+        with open("/proc/meminfo") as f:
+            lines = f.readlines()
+        info = {}
+        for line in lines:
+            parts = line.split()
+            if len(parts) >= 2:
+                info[parts[0].rstrip(":")] = int(parts[1])
+        total = info.get("MemTotal", 0) // 1024
+        available = info.get("MemAvailable", 0) // 1024
+        return total, total - available
+    except (OSError, ValueError):
+        return 0, 0
+
+
+# ============================================================
+# WifiSetupServer — first boot provisioning
+# ============================================================
 class WifiSetupServer:
     """HTTP server for camera WiFi and server configuration."""
 
@@ -96,13 +228,24 @@ class WifiSetupServer:
         led.off()
         log.info("Setup server stopped")
 
-    def save_and_connect(self, ssid, password, server_ip, server_port="8554"):
+    def save_and_connect(self, ssid, password, server_ip, server_port="8554",
+                         admin_username="admin", admin_password=""):
         """Save settings and attempt WiFi connection in background.
 
         Returns immediately so the HTTP response reaches the phone
         before the hotspot is torn down.
         """
         self._connect_result = None
+
+        # Save admin credentials immediately (before WiFi connect attempt)
+        if admin_password:
+            if admin_username:
+                self._config.update(ADMIN_USERNAME=admin_username)
+            self._config.set_password(admin_password)
+            self._config.save()
+            log.info("Camera admin credentials set during provisioning "
+                     "(user=%s)", admin_username)
+
         t = threading.Thread(
             target=self._do_connect,
             args=(ssid, password, server_ip, server_port),
@@ -308,8 +451,6 @@ class WifiSetupServer:
             )
 
             # Activate with explicit interface binding + retry.
-            # Even after NM sees wlan0, AP mode can fail briefly while
-            # the driver finishes initialization.
             max_retries = 5
             for attempt in range(1, max_retries + 1):
                 try:
@@ -358,11 +499,15 @@ class WifiSetupServer:
             pass
 
 
+# ============================================================
+# CameraStatusServer — post-setup authenticated status page
+# ============================================================
 class CameraStatusServer:
     """Lightweight HTTP server showing camera status after setup.
 
-    Runs on port 80 and shows camera ID, WiFi, server connection,
-    stream status, and a form to change WiFi.
+    Runs on port 80. Requires login with the password set during
+    provisioning. Shows camera ID, WiFi, server connection, stream
+    status, system health, and a form to change WiFi.
     """
 
     def __init__(self, config, stream_manager=None):
@@ -411,6 +556,9 @@ class CameraStatusServer:
             return False, str(e)
 
 
+# ============================================================
+# Status page HTTP handler (login-gated)
+# ============================================================
 def _make_status_handler(config, stream_manager, status_server):
     """Create HTTP handler for the camera status page."""
 
@@ -418,12 +566,48 @@ def _make_status_handler(config, stream_manager, status_server):
         def log_message(self, format, *args):
             log.debug("Status HTTP: " + format % args)
 
+        def _is_authenticated(self):
+            """Check if request has a valid session cookie."""
+            if not config.has_password:
+                return True  # No password set = open access (legacy)
+            token = _get_session_cookie(self.headers)
+            return _check_session(token)
+
+        def _require_auth(self):
+            """Return True if authenticated, or send login redirect and return False."""
+            if self._is_authenticated():
+                return True
+            # API calls get 401, browser gets login page
+            if self.path.startswith("/api/"):
+                self._json_response({"error": "Authentication required"}, 401)
+            else:
+                self.send_response(302)
+                self.send_header("Location", "/login")
+                self.end_headers()
+            return False
+
         def do_GET(self):
-            if self.path == "/" or self.path == "/status":
+            if self.path == "/login":
+                self._serve_login_page()
+            elif self.path == "/logout":
+                token = _get_session_cookie(self.headers)
+                _destroy_session(token)
+                self.send_response(302)
+                self.send_header("Set-Cookie",
+                                 "cam_session=; Path=/; Max-Age=0; HttpOnly")
+                self.send_header("Location", "/login")
+                self.end_headers()
+            elif self.path == "/" or self.path == "/status":
+                if not self._require_auth():
+                    return
                 self._serve_status_page()
             elif self.path == "/api/status":
+                if not self._require_auth():
+                    return
                 self._json_response(self._get_status())
             elif self.path == "/api/networks":
+                if not self._require_auth():
+                    return
                 nets = self._scan_networks()
                 self._json_response({"networks": nets})
             else:
@@ -435,7 +619,11 @@ def _make_status_handler(config, stream_manager, status_server):
             content_len = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(content_len) if content_len > 0 else b""
 
-            if self.path == "/api/wifi":
+            if self.path == "/login":
+                self._handle_login(body)
+            elif self.path == "/api/wifi":
+                if not self._require_auth():
+                    return
                 try:
                     data = json.loads(body)
                     ssid = data.get("ssid", "").strip()
@@ -451,11 +639,95 @@ def _make_status_handler(config, stream_manager, status_server):
                     if ok:
                         self._json_response({"message": f"Connected to {ssid}"})
                     else:
-                        self._json_response({"error": err or "Connection failed"}, 500)
+                        self._json_response(
+                            {"error": err or "Connection failed"}, 500)
+                except json.JSONDecodeError:
+                    self._json_response({"error": "Invalid JSON"}, 400)
+            elif self.path == "/api/password":
+                if not self._require_auth():
+                    return
+                try:
+                    data = json.loads(body)
+                    current = data.get("current_password", "")
+                    new_pw = data.get("new_password", "")
+                    if not current or not new_pw:
+                        self._json_response(
+                            {"error": "Both current and new password required"}, 400)
+                        return
+                    if len(new_pw) < 4:
+                        self._json_response(
+                            {"error": "Password must be at least 4 characters"}, 400)
+                        return
+                    if not config.check_password(current):
+                        self._json_response(
+                            {"error": "Current password is incorrect"}, 403)
+                        return
+                    config.set_password(new_pw)
+                    config.save()
+                    self._json_response({"message": "Password changed"})
                 except json.JSONDecodeError:
                     self._json_response({"error": "Invalid JSON"}, 400)
             else:
                 self.send_error(404)
+
+        def _handle_login(self, body):
+            """Process login form or JSON login."""
+            username = ""
+            password = ""
+            content_type = self.headers.get("Content-Type", "")
+
+            if "application/json" in content_type:
+                try:
+                    data = json.loads(body)
+                    username = data.get("username", "").strip()
+                    password = data.get("password", "")
+                except json.JSONDecodeError:
+                    self._json_response({"error": "Invalid JSON"}, 400)
+                    return
+            else:
+                # URL-encoded form
+                from urllib.parse import parse_qs
+                params = parse_qs(body.decode("utf-8", errors="replace"))
+                username = params.get("username", [""])[0].strip()
+                password = params.get("password", [""])[0]
+
+            if not username or not password:
+                self._serve_login_page(error="Username and password required")
+                return
+
+            if (username == config.admin_username
+                    and config.check_password(password)):
+                token = _create_session()
+                log.info("Successful login from %s (user=%s)",
+                         self.client_address[0], username)
+                if "application/json" in content_type:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header(
+                        "Set-Cookie",
+                        f"cam_session={token}; Path=/; HttpOnly; SameSite=Strict"
+                    )
+                    resp = json.dumps({"message": "Login successful"}).encode()
+                    self.send_header("Content-Length", str(len(resp)))
+                    self.end_headers()
+                    self.wfile.write(resp)
+                else:
+                    self.send_response(302)
+                    self.send_header(
+                        "Set-Cookie",
+                        f"cam_session={token}; Path=/; HttpOnly; SameSite=Strict"
+                    )
+                    self.send_header("Location", "/")
+                    self.end_headers()
+            else:
+                log.warning("Failed login from %s (user=%s)",
+                            self.client_address[0], username)
+                if "application/json" in content_type:
+                    self._json_response(
+                        {"error": "Invalid username or password"}, 401)
+                else:
+                    self._serve_login_page(
+                        error="Invalid username or password")
 
         def _get_status(self):
             """Collect camera status info."""
@@ -498,7 +770,7 @@ def _make_status_handler(config, stream_manager, status_server):
             except Exception:
                 pass
 
-            # Server connection — try resolving server address
+            # Server connection
             server_connected = False
             server_addr = config.server_ip or "unknown"
             if config.server_ip:
@@ -514,6 +786,11 @@ def _make_status_handler(config, stream_manager, status_server):
             if stream_manager:
                 streaming = stream_manager.is_streaming
 
+            # System health
+            cpu_temp = _get_cpu_temp()
+            uptime = _get_uptime()
+            mem_total, mem_used = _get_memory_mb()
+
             return {
                 "camera_id": config.camera_id,
                 "hostname": hostname,
@@ -522,6 +799,10 @@ def _make_status_handler(config, stream_manager, status_server):
                 "server_address": server_addr,
                 "server_connected": server_connected,
                 "streaming": streaming,
+                "cpu_temp": cpu_temp,
+                "uptime": uptime,
+                "memory_total_mb": mem_total,
+                "memory_used_mb": mem_used,
             }
 
         def _scan_networks(self):
@@ -533,7 +814,8 @@ def _make_status_handler(config, stream_manager, status_server):
                 )
                 time.sleep(2)
                 r = subprocess.run(
-                    ["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY", "device", "wifi", "list"],
+                    ["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY",
+                     "device", "wifi", "list"],
                     capture_output=True, text=True, timeout=15,
                 )
                 networks = []
@@ -560,8 +842,24 @@ def _make_status_handler(config, stream_manager, status_server):
             self.end_headers()
             self.wfile.write(body)
 
+        def _serve_login_page(self, error=""):
+            html = _load_template("login.html").replace(
+                "{{CAMERA_ID}}", config.camera_id
+            ).replace(
+                "{{ERROR}}", _html_escape(error)
+            ).replace(
+                "{{ERROR_DISPLAY}}", "block" if error else "none"
+            )
+            body = html.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
         def _serve_status_page(self):
-            html = _STATUS_HTML.replace("{{CAMERA_ID}}", config.camera_id)
+            html = _load_template("status.html").replace(
+                "{{CAMERA_ID}}", config.camera_id)
             body = html.encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/html")
@@ -572,218 +870,14 @@ def _make_status_handler(config, stream_manager, status_server):
     return StatusHandler
 
 
-_STATUS_HTML = """<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Camera Status</title>
-<style>
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-       background: #1a1a2e; color: #eee; min-height: 100vh;
-       display: flex; flex-direction: column; align-items: center; }
-.container { max-width: 400px; width: 100%; padding: 20px; }
-h1 { text-align: center; color: #e94560; margin: 30px 0 6px; font-size: 1.5em; }
-.cam-id { text-align: center; color: #666; font-size: 0.8em; margin-bottom: 24px; }
-.card { background: #16213e; border-radius: 12px; padding: 20px; margin: 12px 0; }
-.card h3 { margin-bottom: 12px; font-size: 1.1em; }
-.info-row { display: flex; justify-content: space-between; padding: 10px 0;
-  border-bottom: 1px solid #0f3460; }
-.info-row:last-child { border-bottom: none; }
-.info-label { color: #8090b0; font-size: 0.9em; }
-.info-value { font-weight: 500; }
-.status-ok { color: #4ade80; }
-.status-err { color: #f87171; }
-label { display: block; margin: 12px 0 4px; color: #8090b0; font-size: 0.85em; }
-input[type=text], input[type=password] {
-  width: 100%; padding: 12px; border: 1px solid #2a3a5e; border-radius: 8px;
-  background: #0f3460; color: #eee; font-size: 1em; outline: none; }
-input:focus { border-color: #e94560; }
-.btn { display: block; width: 100%; padding: 14px; border: none; border-radius: 10px;
-  font-size: 1em; font-weight: 600; cursor: pointer; margin-top: 14px; }
-.btn-primary { background: #e94560; color: #fff; }
-.btn-primary:hover { background: #d63851; }
-.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn-secondary { background: #0f3460; color: #b0b0c0; margin-top: 8px; }
-.btn-secondary:hover { background: #133a6a; }
-.network-list { max-height: 200px; overflow-y: auto; margin: 8px 0; }
-.net { padding: 10px 12px; border-bottom: 1px solid #0f3460; cursor: pointer;
-  display: flex; justify-content: space-between; align-items: center; }
-.net:hover { background: #0f3460; border-radius: 6px; }
-.msg { text-align: center; padding: 12px; border-radius: 8px; margin: 8px 0; font-size: 0.9em; }
-.msg-ok { background: #065f46; color: #d1fae5; }
-.msg-err { background: #7f1d1d; color: #fecaca; }
-.msg-warn { background: #78350f; color: #fde68a; }
-#wifi-form { display: none; }
-</style>
-</head>
-<body>
-<div class="container">
-  <h1>Camera Status</h1>
-  <p class="cam-id">{{CAMERA_ID}}</p>
-
-  <div class="card">
-    <h3>Device Info</h3>
-    <div class="info-row">
-      <span class="info-label">Hostname</span>
-      <span class="info-value" id="s-hostname">--</span>
-    </div>
-    <div class="info-row">
-      <span class="info-label">IP Address</span>
-      <span class="info-value" id="s-ip">--</span>
-    </div>
-    <div class="info-row">
-      <span class="info-label">WiFi Network</span>
-      <span class="info-value" id="s-wifi">--</span>
-    </div>
-  </div>
-
-  <div class="card">
-    <h3>Connection Status</h3>
-    <div class="info-row">
-      <span class="info-label">Server</span>
-      <span class="info-value" id="s-server">--</span>
-    </div>
-    <div class="info-row">
-      <span class="info-label">Stream</span>
-      <span class="info-value" id="s-stream">--</span>
-    </div>
-  </div>
-
-  <button class="btn btn-secondary" id="btn-wifi" onclick="toggleWifi()">Change WiFi</button>
-
-  <div id="wifi-form">
-    <div class="card">
-      <h3>Change WiFi Network</h3>
-      <div class="msg msg-warn">Warning: Changing WiFi will briefly disconnect the camera.</div>
-      <div id="net-list" class="network-list"></div>
-      <button class="btn btn-secondary" onclick="scanNetworks()" id="btn-scan" style="margin-bottom:8px;">Scan for Networks</button>
-      <label>WiFi Name (SSID)</label>
-      <input type="text" id="in-ssid" placeholder="Network name">
-      <label>WiFi Password</label>
-      <input type="password" id="in-pass" placeholder="Password">
-      <button class="btn btn-primary" id="btn-connect" onclick="doConnect()">Connect</button>
-      <div id="wifi-result"></div>
-    </div>
-  </div>
-</div>
-
-<script>
-function $(id) { return document.getElementById(id); }
-
-function loadStatus() {
-  fetch('/api/status')
-    .then(function(r) { return r.json(); })
-    .then(function(d) {
-      $('s-hostname').textContent = d.hostname || '--';
-      $('s-ip').textContent = d.ip_address || '--';
-      $('s-wifi').textContent = d.wifi_ssid || 'Not connected';
-
-      var serverEl = $('s-server');
-      if (d.server_connected) {
-        serverEl.textContent = d.server_address + ' (connected)';
-        serverEl.className = 'info-value status-ok';
-      } else {
-        serverEl.textContent = d.server_address + ' (disconnected)';
-        serverEl.className = 'info-value status-err';
-      }
-
-      var streamEl = $('s-stream');
-      if (d.streaming) {
-        streamEl.textContent = 'Streaming';
-        streamEl.className = 'info-value status-ok';
-      } else {
-        streamEl.textContent = 'Not streaming';
-        streamEl.className = 'info-value status-err';
-      }
-    })
-    .catch(function() {});
-}
-
-function toggleWifi() {
-  var form = $('wifi-form');
-  form.style.display = form.style.display === 'none' ? 'block' : 'none';
-}
-
-function scanNetworks() {
-  var btn = $('btn-scan');
-  btn.disabled = true;
-  btn.textContent = 'Scanning...';
-  $('net-list').innerHTML = '';
-
-  fetch('/api/networks')
-    .then(function(r) { return r.json(); })
-    .then(function(d) {
-      var nets = d.networks || [];
-      var html = '';
-      nets.forEach(function(n) {
-        html += '<div class="net" onclick="pickNet(\\''+esc(n.ssid)+'\\')"><span>'+esc(n.ssid)+'</span><span style="color:#4ade80;font-size:0.85em">'+n.signal+'%</span></div>';
-      });
-      $('net-list').innerHTML = html || '<div class="msg" style="color:#8090b0">No networks found</div>';
-      btn.disabled = false;
-      btn.textContent = 'Scan for Networks';
-    })
-    .catch(function() {
-      btn.disabled = false;
-      btn.textContent = 'Scan for Networks';
-      $('net-list').innerHTML = '<div class="msg msg-err">Scan failed</div>';
-    });
-}
-
-function pickNet(ssid) {
-  $('in-ssid').value = ssid;
-  $('in-pass').focus();
-}
-
-function doConnect() {
-  var ssid = $('in-ssid').value.trim();
-  var pass = $('in-pass').value;
-  if (!ssid) { alert('Enter WiFi name'); return; }
-  if (!pass) { alert('Enter WiFi password'); return; }
-
-  $('btn-connect').disabled = true;
-  $('btn-connect').textContent = 'Connecting...';
-  $('wifi-result').innerHTML = '';
-
-  fetch('/api/wifi', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ssid: ssid, password: pass})
-  })
-  .then(function(r) { return r.json(); })
-  .then(function(d) {
-    $('btn-connect').disabled = false;
-    $('btn-connect').textContent = 'Connect';
-    if (d.error) {
-      $('wifi-result').innerHTML = '<div class="msg msg-err">' + esc(d.error) + '</div>';
-    } else {
-      $('wifi-result').innerHTML = '<div class="msg msg-ok">' + esc(d.message || 'Connected!') + '</div>';
-      setTimeout(loadStatus, 2000);
-    }
-  })
-  .catch(function() {
-    $('btn-connect').disabled = false;
-    $('btn-connect').textContent = 'Connect';
-    $('wifi-result').innerHTML = '<div class="msg msg-err">Request failed — camera may have changed networks. Try reconnecting.</div>';
-  });
-}
-
-function esc(s) {
-  var d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML.replace(/'/g, "\\\\'");
-}
-
-// Load on start, then refresh every 10s
-loadStatus();
-setInterval(loadStatus, 10000);
-</script>
-</body>
-</html>
-"""
+def _html_escape(s):
+    """Escape HTML special characters."""
+    return (s.replace("&", "&amp;").replace("<", "&lt;")
+             .replace(">", "&gt;").replace('"', "&quot;"))
 
 
+# Setup page handler (first boot — no auth required)
+# ============================================================
 def _make_handler(config, setup_server):
     """Create an HTTP request handler with access to config/setup."""
 
@@ -808,18 +902,25 @@ def _make_handler(config, setup_server):
                 else:
                     status = "failed"
                     error = str(result)
+                # Include hostname so setup success page can show .local URL
+                hostname = ""
+                try:
+                    r = subprocess.run(
+                        ["hostname"], capture_output=True, text=True, timeout=5,
+                    )
+                    hostname = r.stdout.strip()
+                except Exception:
+                    pass
                 self._json_response({
                     "status": status,
                     "error": error,
                     "setup_complete": is_setup_complete(config.data_dir),
                     "camera_id": config.camera_id,
+                    "hostname": hostname,
                 })
             else:
                 # Captive portal: redirect ANY unknown path to setup page.
-                # When phone connects to hotspot and checks connectivity
-                # (Apple, Android, Windows all probe different URLs),
-                # this redirect triggers the "Sign in to network" popup.
-                log.debug("Captive portal redirect: %s → /setup", self.path)
+                log.debug("Captive portal redirect: %s -> /setup", self.path)
                 self.send_response(302)
                 self.send_header("Location", "http://10.42.0.1/setup")
                 self.end_headers()
@@ -835,6 +936,8 @@ def _make_handler(config, setup_server):
                     password = data.get("password", "")
                     server_ip = data.get("server_ip", "").strip()
                     server_port = data.get("server_port", "8554").strip()
+                    admin_username = data.get("admin_username", "admin").strip()
+                    admin_password = data.get("admin_password", "")
 
                     if not ssid:
                         self._json_response({"error": "WiFi name required"}, 400)
@@ -845,10 +948,22 @@ def _make_handler(config, setup_server):
                     if not server_ip:
                         self._json_response({"error": "Server IP required"}, 400)
                         return
+                    if not admin_username or len(admin_username) < 3:
+                        self._json_response(
+                            {"error": "Username required (min 3 characters)"},
+                            400)
+                        return
+                    if not admin_password or len(admin_password) < 4:
+                        self._json_response(
+                            {"error": "Password required (min 4 characters)"},
+                            400)
+                        return
 
                     # Start connection in background
                     setup_server.save_and_connect(
-                        ssid, password, server_ip, server_port
+                        ssid, password, server_ip, server_port,
+                        admin_username=admin_username,
+                        admin_password=admin_password,
                     )
 
                     self._json_response({
@@ -874,7 +989,7 @@ def _make_handler(config, setup_server):
             self.wfile.write(body)
 
         def _serve_setup_page(self):
-            html = _SETUP_HTML.replace(
+            html = _load_template("setup.html").replace(
                 "{{CAMERA_ID}}", config.camera_id
             )
             body = html.encode()
@@ -887,226 +1002,3 @@ def _make_handler(config, setup_server):
     return SetupHandler
 
 
-_SETUP_HTML = """<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Camera Setup</title>
-<style>
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-       background: #1a1a2e; color: #eee; min-height: 100vh;
-       display: flex; flex-direction: column; align-items: center; }
-.container { max-width: 400px; width: 100%; padding: 20px; }
-h1 { text-align: center; color: #e94560; margin: 30px 0 6px; font-size: 1.5em; }
-.cam-id { text-align: center; color: #666; font-size: 0.8em; margin-bottom: 24px; }
-.card { background: #16213e; border-radius: 12px; padding: 20px; margin: 12px 0; }
-.card h3 { margin-bottom: 12px; font-size: 1.1em; }
-label { display: block; margin: 12px 0 4px; color: #8090b0; font-size: 0.85em; }
-input[type=text], input[type=password] {
-  width: 100%; padding: 12px; border: 1px solid #2a3a5e; border-radius: 8px;
-  background: #0f3460; color: #eee; font-size: 1em; outline: none; }
-input:focus { border-color: #e94560; }
-.btn { display: block; width: 100%; padding: 14px; border: none; border-radius: 10px;
-  font-size: 1em; font-weight: 600; cursor: pointer; margin-top: 14px; }
-.btn-primary { background: #e94560; color: #fff; }
-.btn-primary:hover { background: #d63851; }
-.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn-secondary { background: #0f3460; color: #b0b0c0; margin-top: 8px; }
-.btn-secondary:hover { background: #133a6a; }
-.hint { color: #506080; font-size: 0.8em; margin-top: 4px; }
-.network-list { max-height: 200px; overflow-y: auto; margin: 8px 0; }
-.net { padding: 10px 12px; border-bottom: 1px solid #0f3460; cursor: pointer;
-  display: flex; justify-content: space-between; align-items: center; }
-.net:hover { background: #0f3460; border-radius: 6px; }
-.net-ssid { font-weight: 500; }
-.net-signal { color: #4ade80; font-size: 0.85em; }
-.msg { text-align: center; padding: 16px; border-radius: 8px; margin: 12px 0; }
-.msg-info { background: #0f3460; color: #8090b0; }
-.msg-ok { background: #065f46; color: #d1fae5; }
-.msg-err { background: #7f1d1d; color: #fecaca; }
-.msg-warn { background: #78350f; color: #fde68a; }
-.spinner { display: inline-block; width: 18px; height: 18px;
-  border: 2px solid rgba(255,255,255,0.2); border-top-color: #fff;
-  border-radius: 50%; animation: spin 0.7s linear infinite;
-  vertical-align: middle; margin-right: 8px; }
-@keyframes spin { to { transform: rotate(360deg); } }
-#view-form, #view-connecting, #view-result { display: none; }
-#view-form.active, #view-connecting.active, #view-result.active { display: block; }
-</style>
-</head>
-<body>
-<div class="container">
-  <h1>Camera Setup</h1>
-  <p class="cam-id">{{CAMERA_ID}}</p>
-
-  <!-- FORM VIEW -->
-  <div id="view-form" class="active">
-    <div class="card">
-      <h3>WiFi Network</h3>
-      <div id="net-section">
-        <div id="net-list-wrap" style="display:none">
-          <p style="color:#8090b0;font-size:0.85em;margin-bottom:6px">
-            Networks found before hotspot started. Tap to select:</p>
-          <div class="network-list" id="net-list"></div>
-        </div>
-        <label>WiFi Name (SSID)</label>
-        <input type="text" id="in-ssid" placeholder="Your WiFi network name">
-        <label>WiFi Password</label>
-        <input type="password" id="in-pass" placeholder="WiFi password">
-      </div>
-    </div>
-
-    <div class="card">
-      <h3>Server Connection</h3>
-      <label>Server Address</label>
-      <input type="text" id="in-server" value="rpi-divinu.local" placeholder="rpi-divinu.local">
-      <div class="hint">Default works out of the box. Change only if you renamed your server.</div>
-      <label>RTSP Port</label>
-      <input type="text" id="in-port" value="8554">
-    </div>
-
-    <button class="btn btn-primary" id="btn-save" onclick="doConnect()">
-      Save &amp; Connect
-    </button>
-    <button class="btn btn-secondary" onclick="loadNetworks()">
-      Scan for Networks
-    </button>
-    <p class="hint" style="text-align:center;margin-top:8px">
-      Scanning will briefly drop the hotspot connection.</p>
-  </div>
-
-  <!-- CONNECTING VIEW -->
-  <div id="view-connecting">
-    <div class="card">
-      <div class="msg msg-info">
-        <div class="spinner"></div> Connecting to WiFi...
-      </div>
-      <p style="color:#8090b0;font-size:0.85em;text-align:center;margin-top:12px">
-        The hotspot will disappear now. This is normal.<br><br>
-        <strong>If it worked:</strong> the camera LED will go solid.
-        You can close this page.<br><br>
-        <strong>If it failed:</strong> the <em>HomeCam-Setup</em> hotspot
-        will reappear in about 30 seconds. Reconnect and try again.
-      </p>
-    </div>
-  </div>
-
-  <!-- RESULT VIEW (shown if user reconnects after failure) -->
-  <div id="view-result">
-    <div id="result-msg" class="msg msg-err"></div>
-    <button class="btn btn-primary" onclick="showForm()">Try Again</button>
-  </div>
-</div>
-
-<script>
-function $(id) { return document.getElementById(id); }
-
-function showView(name) {
-  ['view-form','view-connecting','view-result'].forEach(function(v) {
-    $(v).className = v === name ? 'active' : '';
-  });
-}
-
-function showForm() { showView('view-form'); }
-
-function loadNetworks() {
-  var wrap = $('net-list-wrap');
-  var list = $('net-list');
-  list.innerHTML = '<div class="msg msg-warn"><div class="spinner"></div> Scanning... hotspot will drop briefly, please wait.</div>';
-  wrap.style.display = 'block';
-
-  fetch('/api/rescan', {method: 'POST'})
-    .then(function(r) { return r.json(); })
-    .then(function(d) { renderNetworks(d.networks || []); })
-    .catch(function() {
-      list.innerHTML = '<div class="msg msg-err">Scan failed — you may need to reconnect to HomeCam-Setup and try again.</div>';
-    });
-}
-
-function renderNetworks(nets) {
-  var list = $('net-list');
-  if (nets.length === 0) {
-    list.innerHTML = '<div class="msg msg-info">No networks found. Type SSID manually.</div>';
-    return;
-  }
-  var html = '';
-  nets.forEach(function(n) {
-    html += '<div class="net" onclick="pickNet(\\''+esc(n.ssid)+'\\')"><span class="net-ssid">'
-      +esc(n.ssid)+'</span><span class="net-signal">'+n.signal+'%</span></div>';
-  });
-  list.innerHTML = html;
-}
-
-function pickNet(ssid) {
-  $('in-ssid').value = ssid;
-  $('in-pass').focus();
-}
-
-function doConnect() {
-  var ssid = $('in-ssid').value.trim();
-  var pass = $('in-pass').value;
-  var server = $('in-server').value.trim();
-  var port = $('in-port').value.trim() || '8554';
-
-  if (!ssid) { alert('Enter WiFi network name'); return; }
-  if (!pass) { alert('Enter WiFi password'); return; }
-  if (!server) { alert('Enter server IP address'); return; }
-
-  $('btn-save').disabled = true;
-
-  fetch('/api/connect', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ssid:ssid, password:pass, server_ip:server, server_port:port})
-  })
-  .then(function(r) { return r.json(); })
-  .then(function(d) {
-    if (d.error) {
-      alert(d.error);
-      $('btn-save').disabled = false;
-    } else {
-      showView('view-connecting');
-    }
-  })
-  .catch(function() {
-    showView('view-connecting');
-  });
-}
-
-function esc(s) {
-  var d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML.replace(/'/g, "\\\\'");
-}
-
-// On page load: check if we're returning after a failed attempt
-fetch('/api/status')
-  .then(function(r) { return r.json(); })
-  .then(function(d) {
-    if (d.setup_complete) {
-      showView('view-result');
-      $('result-msg').className = 'msg msg-ok';
-      $('result-msg').textContent = 'Setup complete! Camera is connected.';
-    } else if (d.status === 'failed') {
-      showView('view-result');
-      $('result-msg').textContent = 'WiFi connection failed: ' + d.error + '. Try again.';
-    } else {
-      // Load cached networks from pre-hotspot scan
-      fetch('/api/networks')
-        .then(function(r) { return r.json(); })
-        .then(function(nd) {
-          var nets = nd.networks || [];
-          if (nets.length > 0) {
-            $('net-list-wrap').style.display = 'block';
-            renderNetworks(nets);
-          }
-        });
-    }
-  })
-  .catch(function() {});
-</script>
-</body>
-</html>
-"""

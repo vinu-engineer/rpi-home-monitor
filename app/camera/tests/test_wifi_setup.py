@@ -65,9 +65,10 @@ class TestWifiSetupServer:
         server = WifiSetupServer(unconfigured_config)
         assert server.needs_setup() is False
 
+    @patch("http.server.HTTPServer")
     @patch("camera_streamer.wifi_setup.WifiSetupServer._start_hotspot")
     @patch("camera_streamer.wifi_setup.WifiSetupServer._scan_wifi")
-    def test_start_when_needed(self, mock_scan, mock_hotspot, unconfigured_config):
+    def test_start_when_needed(self, mock_scan, mock_hotspot, mock_httpd, unconfigured_config):
         """start() should pre-scan, start hotspot, and start HTTP server."""
         mock_scan.return_value = [{"ssid": "TestNet", "signal": 80, "security": "WPA2"}]
         mock_hotspot.return_value = True
@@ -92,9 +93,10 @@ class TestWifiSetupServer:
         mock_hotspot.assert_not_called()
         mock_scan.assert_not_called()
 
+    @patch("http.server.HTTPServer")
     @patch("camera_streamer.wifi_setup.WifiSetupServer._start_hotspot")
     @patch("camera_streamer.wifi_setup.WifiSetupServer._scan_wifi")
-    def test_start_with_hotspot_failure(self, mock_scan, mock_hotspot, unconfigured_config):
+    def test_start_with_hotspot_failure(self, mock_scan, mock_hotspot, mock_httpd, unconfigured_config):
         """start() should still work if hotspot fails (e.g. no WiFi hw)."""
         mock_scan.return_value = []
         mock_hotspot.return_value = False

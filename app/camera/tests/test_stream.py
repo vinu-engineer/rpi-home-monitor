@@ -36,10 +36,10 @@ class TestStreamManager:
             time.sleep(0.2)
             mgr.stop()
 
-    def test_build_ffmpeg_cmd(self, camera_config):
+    def test_build_ffmpeg_only_cmd(self, camera_config):
         """Should build correct ffmpeg command."""
         mgr = StreamManager(camera_config)
-        cmd = mgr._build_ffmpeg_cmd()
+        cmd = mgr._build_ffmpeg_only_cmd()
         assert cmd[0] == "ffmpeg"
         assert "-nostdin" in cmd
         assert "-f" in cmd

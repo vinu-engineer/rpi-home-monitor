@@ -10,6 +10,7 @@ class TestMainSetupMode:
     """Test main() behavior during first-boot setup."""
 
     @patch("camera_streamer.main._resolve_server")
+    @patch("camera_streamer.main._wait_for_wifi_connectivity", return_value=True)
     @patch("camera_streamer.wifi_setup.WifiSetupServer")
     @patch("camera_streamer.health.HealthMonitor")
     @patch("camera_streamer.stream.StreamManager")
@@ -18,7 +19,7 @@ class TestMainSetupMode:
     @patch("camera_streamer.config.ConfigManager")
     def test_main_waits_for_setup(
         self, MockConfig, MockCapture, MockDiscovery,
-        MockStream, MockHealth, MockSetup, mock_resolve
+        MockStream, MockHealth, MockSetup, mock_wifi, mock_resolve
     ):
         """Main should block while waiting for setup to complete."""
         config = MagicMock()
@@ -91,6 +92,7 @@ class TestMainCaptureFailure:
     """Test main() when camera device isn't available."""
 
     @patch("camera_streamer.main._resolve_server")
+    @patch("camera_streamer.main._wait_for_wifi_connectivity", return_value=True)
     @patch("camera_streamer.wifi_setup.WifiSetupServer")
     @patch("camera_streamer.health.HealthMonitor")
     @patch("camera_streamer.stream.StreamManager")
@@ -99,7 +101,7 @@ class TestMainCaptureFailure:
     @patch("camera_streamer.config.ConfigManager")
     def test_continues_without_camera(
         self, MockConfig, MockCapture, MockDiscovery,
-        MockStream, MockHealth, MockSetup, mock_resolve
+        MockStream, MockHealth, MockSetup, mock_wifi, mock_resolve
     ):
         """Should continue running even if camera check fails."""
         config = MagicMock()

@@ -260,7 +260,70 @@ These rules apply to ALL code, whether application or recipe:
 - **All pages must work without JavaScript** for basic content. JS enhances (auto-refresh, live video) but pages should degrade gracefully.
 - **No CDN dependencies.** All assets served locally. The system works without internet.
 
-### 3.6 Testing Rules
+### 3.6 Design Patterns & Architecture Rules
+
+This project follows a small, deliberate set of design patterns. These are chosen for an embedded system with limited RAM (512MB on camera, 4GB on server) — simplicity and low overhead are priorities.
+
+#### Patterns We Use
+
+| Pattern | Where | Purpose |
+|---------|-------|---------|
+| **App Factory** | `server/__init__.py` | `create_app()` builds Flask with all deps |
+| **Blueprint/Module** | `server/api/*.py` | One blueprint per API domain |
+| **Service Layer** | `server/services/*.py` | Business logic separated from HTTP routes |
+| **Repository** | `server/store.py` | Data access abstracted behind `Store` class |
+| **Data Transfer Objects** | `server/models.py`, `camera/config.py` | Dataclasses for structured data |
+| **Platform Provider** | `camera/platform.py` | Hardware abstraction — all device paths in one place |
+| **Strategy** | Streaming backends, capture backends | Swappable implementations behind a Protocol interface |
+| **Fail-Silent Adapter** | `camera/led.py`, hardware access | Wraps hardware calls, fails gracefully on unsupported platforms |
+| **Constructor Injection** | All classes | Dependencies passed in `__init__`, never imported globals |
+
+#### Patterns We Do NOT Use (and Why)
+
+| Pattern | Why Not |
+|---------|---------|
+| **DI Container** (inject, dependency-injector) | ~10 services total. Constructor injection is sufficient. |
+| **Abstract Factory** | Not building families of related objects. Strategy covers our needs. |
+| **Event Sourcing / CQRS** | JSON files, not a database. Adds complexity for zero benefit. |
+| **Microservices** | 512MB device. One process per app is correct. |
+| **Plugin System** (dynamic loading) | Firmware, not VS Code. Compile-time decisions are fine. |
+| **ORM / Active Record** | No SQL database. JSON files with atomic writes. |
+
+#### Single Responsibility Rule
+
+- **One class per file, one concern per class.** If a file has two classes, split it.
+- **Exception:** Small related dataclasses may share a file (e.g., `models.py`).
+- **God files are banned.** If a file exceeds ~300 lines, it's doing too much — split it.
+- **Each module should be describable in one sentence.** If you need "and" in the description, it's two modules.
+
+#### Platform Abstraction Rule
+
+- **All hardware paths come from `Platform` provider or environment variables.** Never hardcode `/dev/video0`, `/sys/class/leds/ACT`, `wlan0`, or `thermal_zone0` directly in business logic.
+- **`platform.py`** auto-detects hardware, can be overridden by env vars.
+- **Modules receive hardware paths via constructor injection.** Example: `LedController(led_path=platform.led_path)`.
+- **Hardware access must fail silently** on unsupported platforms (tests, containers, different boards).
+
+#### Strategy Pattern Rule
+
+- **Swappable backends use `typing.Protocol`** to define the interface.
+- **Current strategies:** `StreamBackend` (FFmpeg vs go2rtc), `CaptureBackend` (v4l2 vs libcamera), `PlayerBackend` (WebRTC vs HLS).
+- **Selection happens at startup** in `main.py` or `create_app()`, not scattered in business logic.
+- **New backends** are added by creating a new class that satisfies the Protocol — no existing code changes needed.
+
+#### Dependency Injection Rule
+
+- **Pass dependencies in `__init__`.** Never import a service and call it directly from another service.
+- **Flask app context** (`current_app`) is acceptable for accessing app-wide singletons (Store, AuditLogger).
+- **No service locators, no global registries.** If a service needs another service, it receives it as a constructor argument.
+
+#### Live Streaming Architecture Rule
+
+- **Recordings use HLS** (FFmpeg → 3-min MP4 clips). This is the storage pipeline.
+- **Live view uses WebRTC** (MediaMTX WHEP → browser). Sub-second latency.
+- **Fallback cascade:** WebRTC → HLS. The player tries WebRTC first, falls back to HLS if ICE negotiation fails.
+- **MediaMTX is the single stream hub.** Camera pushes RTSP to MediaMTX. All consumers (WebRTC, HLS, recording) read from MediaMTX. Never duplicate the camera stream.
+
+### 3.7 Testing Rules
 
 **Full details: [`docs/testing-guide.md`](testing-guide.md)** — setup, writing tests, running tests, coverage reports, examples, checklists.
 

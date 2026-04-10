@@ -15,19 +15,21 @@ Two separate applications in `app/`:
 - `app/server/` = Flask web app (monitor-server) — runs on RPi 4B
 - `app/camera/` = Python streaming service (camera-streamer) — runs on Zero 2W
 
-## Video Pipeline (Fully Implemented)
+## Video Pipeline
 
 ```
-Camera (V4L2 /dev/video0) → FFmpeg (H.264 RTSP push)
+Camera (V4L2) → FFmpeg (H.264 RTSP push)
     → MediaMTX (:8554) on server
-        ├→ FFmpeg HLS    → /data/live/<cam-id>/stream.m3u8 (2s segments, rolling 5)
+        ├→ WebRTC (WHEP :8889) → browser <video> (sub-1s latency, live view)
         ├→ FFmpeg Record → /data/recordings/<cam-id>/YYYY-MM-DD/HH-MM-SS.mp4 (3-min clips)
         └→ FFmpeg Snap   → /data/live/<cam-id>/snapshot.jpg (every 30s)
+        └→ FFmpeg HLS    → /data/live/<cam-id>/stream.m3u8 (fallback only)
 
-Web browser → NGINX (:443 HTTPS) → HLS.js player
-    ├→ /live/<cam-id>/* → served direct from /data/live/
+Web browser → NGINX (:443 HTTPS)
+    ├→ /webrtc/<cam-id>/ → proxy to MediaMTX :8889 (WHEP, primary live view)
+    ├→ /live/<cam-id>/*  → HLS segments (fallback)
     ├→ /clips/<cam-id>/* → served direct from /data/recordings/
-    └→ /api/* → Flask (:5000)
+    └→ /api/*            → Flask (:5000)
 ```
 
 ## Custom Distro: `home-monitor`
@@ -53,6 +55,25 @@ We do NOT use `DISTRO = "poky"` (the reference distro). We have our own:
 - **HLS** for live view in mobile browsers (HLS.js)
 - **MediaMTX** as RTSP relay server (port 8554)
 - **OS branding** — `/etc/os-release` shows "Home Monitor OS"
+
+## Design Patterns (Mandatory)
+
+Full rules in [`docs/development-guide.md`](docs/development-guide.md) Section 3.6.
+
+**Patterns we follow:**
+- **Single Responsibility** — one class per file, one concern per class. No god files (>300 lines).
+- **Platform Provider** — `camera/platform.py` provides all hardware paths. Never hardcode `/dev/video0`, `/sys/class/leds/ACT`, `wlan0`, `thermal_zone0`.
+- **Strategy** — swappable backends via `typing.Protocol` (streaming, capture, detection, player).
+- **Constructor Injection** — pass deps in `__init__()`. No DI frameworks, no global registries.
+- **Fail-Silent Adapter** — all hardware access wrapped in try/except, fails gracefully.
+- **App Factory** — Flask `create_app()`, blueprints, service layer.
+- **Repository** — `Store` class for JSON persistence with atomic writes.
+
+**Patterns we NEVER use:**
+- No DI containers, no event sourcing, no CQRS, no microservices, no plugin systems, no ORM.
+
+**Live streaming:**
+- WebRTC (MediaMTX WHEP) for live view (sub-1s). HLS as fallback only. Recordings stay FFmpeg→MP4.
 
 ## Phases
 
@@ -116,14 +137,17 @@ We do NOT use `DISTRO = "poky"` (the reference distro). We have our own:
 
 | Component | File | Status | What It Does |
 |-----------|------|--------|--------------|
-| Entry point | `main.py` | COMPLETE | Config → setup check → hotspot/stream → Avahi → health monitor |
+| Entry point | `main.py` | COMPLETE | Config → platform detect → setup check → stream → health |
+| Platform | `platform.py` | COMPLETE | Hardware abstraction — detects device paths, LED, thermal, WiFi interface |
 | Config | `config.py` | COMPLETE | /data/config/camera.conf, auto-generates cam ID from hardware serial |
-| V4L2 capture | `capture.py` | COMPLETE | Detects /dev/video0, queries H.264 support, validates resolution |
+| V4L2 capture | `capture.py` | COMPLETE | Detects camera device, queries H.264 support, validates resolution |
 | RTSP stream | `stream.py` | COMPLETE | FFmpeg v4l2→RTSP push to server:8554, exponential backoff reconnect |
-| WiFi setup | `wifi_setup.py` | COMPLETE | "HomeCam-Setup" AP, HTTP server :80, collects WiFi+server IP, saves config |
-| LED control | `led.py` | COMPLETE | ACT LED patterns: setup(1s blink), connecting(200ms), connected(solid), error(100ms) |
+| WiFi setup | `wifi_setup.py` | COMPLETE | "HomeCam-Setup" AP, HTTP server :80, first-boot setup wizard |
+| Status server | `status_server.py` | COMPLETE | Post-setup status page with auth, WiFi change, system health |
+| WiFi utils | `wifi.py` | COMPLETE | Shared WiFi operations: scan, connect, hotspot start/stop |
+| LED control | `led.py` | COMPLETE | LedController class — patterns via sysfs, injectable path, fail-silent |
 | Discovery | `discovery.py` | PARTIAL | Avahi _rtsp._tcp advertisement with TXT records |
-| Health | `health.py` | PARTIAL | Device accessible, ffmpeg alive, server connectivity, watchdog |
+| Health | `health.py` | COMPLETE | CPU temp, memory, uptime, watchdog — injectable thermal path |
 | Pairing | `pairing.py` | STUB | mTLS cert exchange — Phase 2 |
 | OTA agent | `ota_agent.py` | STUB | Update listener — Phase 2 |
 
@@ -156,6 +180,7 @@ We do NOT use `DISTRO = "poky"` (the reference distro). We have our own:
 | 443 | NGINX | Server | HTTPS web dashboard |
 | 5000 | Flask | Server | App (loopback, proxied by NGINX) |
 | 8554 | MediaMTX | Server | RTSP camera stream input |
+| 8889 | MediaMTX | Server | WebRTC WHEP (live view, proxied by NGINX) |
 | 22 | SSH | Both | Admin (dev images only) |
 | 80 | Flask | Camera | Setup wizard (first boot only) |
 | 5353 | Avahi | Both | mDNS discovery |

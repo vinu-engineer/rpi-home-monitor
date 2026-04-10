@@ -630,7 +630,52 @@ The architecture must support future additions without redesign:
 
 ---
 
-## 7. Technology Stack Summary
+## 7. Design & Architecture Requirements
+
+### DR-01: Platform Abstraction
+
+- All hardware-specific paths (camera device, LED sysfs, thermal sensor, WiFi interface) must be read from a `Platform` provider or environment variables — never hardcoded in business logic.
+- The `Platform` class auto-detects hardware at startup and can be overridden via environment variables for testing or alternative boards.
+- Modules receive hardware paths via constructor injection.
+- Hardware access must fail silently on unsupported platforms (CI, containers, different SBCs).
+
+### DR-02: Single Responsibility
+
+- Each Python file contains one primary class with one clear responsibility.
+- Files exceeding ~300 lines must be split into focused modules.
+- Each module must be describable in a single sentence without the word "and".
+- Exception: small related dataclasses may share a file (e.g., `models.py`).
+
+### DR-03: Strategy Pattern for Backends
+
+- Swappable components (streaming, capture, detection, notification) define interfaces using `typing.Protocol`.
+- Backend selection happens once at startup, not scattered through business logic.
+- Adding a new backend means creating a new class satisfying the Protocol — no changes to existing code.
+- Current strategies: stream backend (FFmpeg/go2rtc), capture backend (v4l2/libcamera), player backend (WebRTC/HLS).
+
+### DR-04: Constructor Dependency Injection
+
+- All class dependencies are passed via `__init__()`, never imported and used as module-level globals.
+- Flask `current_app` context is acceptable for app-wide singletons (Store, AuditLogger).
+- No DI frameworks, no service locators, no global registries.
+
+### DR-05: Fail-Silent Hardware Access
+
+- All hardware interactions (LED control, thermal sensors, GPIO) are wrapped in try/except with debug-level logging on failure.
+- Missing hardware must never crash the application — degrade gracefully.
+- This enables the same codebase to run on different boards, in CI, and in containers.
+
+### DR-06: Live Streaming Latency
+
+- Live view must use WebRTC (via MediaMTX WHEP) for sub-second latency.
+- HLS is retained as a fallback when WebRTC ICE negotiation fails.
+- Recordings continue to use the FFmpeg HLS-to-MP4 pipeline (unchanged).
+- MediaMTX is the single stream hub — camera pushes RTSP, all consumers read from MediaMTX.
+- The browser player implements a fallback cascade: WebRTC first → HLS fallback.
+
+---
+
+## 8. Technology Stack Summary
 
 | Layer | Technology |
 |-------|-----------|
@@ -638,7 +683,7 @@ The architecture must support future additions without redesign:
 | Init | systemd |
 | Video capture | v4l2 hardware H.264 encoder |
 | Streaming protocol | RTSP over TCP (ffmpeg) |
-| Live view delivery | HLS (nginx serves .m3u8/.ts) |
+| Live view delivery | WebRTC (MediaMTX WHEP, sub-1s) with HLS fallback |
 | Recording format | MP4 (3-minute segments, ffmpeg) |
 | Web backend | Python 3 + Flask |
 | Web frontend | HTML5 + CSS + vanilla JS (mobile-first) |
@@ -654,7 +699,7 @@ The architecture must support future additions without redesign:
 
 ---
 
-## 8. Open Questions / Future Decisions
+## 9. Open Questions / Future Decisions
 
 | # | Question | When to decide |
 |---|----------|---------------|

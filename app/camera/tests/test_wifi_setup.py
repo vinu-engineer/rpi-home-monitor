@@ -47,14 +47,16 @@ class TestWifiSetupServer:
         server = WifiSetupServer(unconfigured_config)
         assert server.needs_setup() is False
 
+    @patch("http.server.HTTPServer")
     @patch("camera_streamer.wifi_setup.WifiSetupServer._start_hotspot")
-    def test_start_when_needed(self, mock_hotspot, unconfigured_config):
+    def test_start_when_needed(self, mock_hotspot, mock_http_server, unconfigured_config):
         """start() should activate when setup needed."""
         mock_hotspot.return_value = True
         server = WifiSetupServer(unconfigured_config)
         result = server.start()
         assert result is True
         mock_hotspot.assert_called_once()
+        mock_http_server.assert_called_once()
         server.stop()
 
     @patch("camera_streamer.wifi_setup.WifiSetupServer._start_hotspot")

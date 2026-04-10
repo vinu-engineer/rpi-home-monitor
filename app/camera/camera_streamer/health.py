@@ -7,7 +7,7 @@ Checks:
 - ffmpeg process alive
 - Network connectivity to server
 - Disk space on /data
-- CPU temperature
+- CPU temperature (via injectable thermal_path from Platform)
 """
 import os
 import logging
@@ -18,12 +18,21 @@ log = logging.getLogger("camera-streamer.health")
 
 
 class HealthMonitor:
-    """Monitor camera system health and report to systemd watchdog."""
+    """Monitor camera system health and report to systemd watchdog.
 
-    def __init__(self, config, capture_mgr, stream_mgr):
+    Args:
+        config: ConfigManager instance.
+        capture_mgr: CaptureManager instance.
+        stream_mgr: StreamManager instance.
+        thermal_path: Path to thermal sensor file (from Platform).
+                      None disables temperature monitoring.
+    """
+
+    def __init__(self, config, capture_mgr, stream_mgr, thermal_path=None):
         self._config = config
         self._capture = capture_mgr
         self._stream = stream_mgr
+        self._thermal_path = thermal_path
         self._running = False
         self._thread = None
         self._interval = 15  # seconds between health checks
@@ -55,9 +64,19 @@ class HealthMonitor:
             "streaming": self._stream.is_streaming,
             "server_configured": self._config.is_configured,
             "camera_id": self._config.camera_id,
-            "cpu_temp": _read_cpu_temp(),
+            "cpu_temp": self.read_cpu_temp(),
             "disk_free_mb": _get_disk_free_mb(self._config.data_dir),
         }
+
+    def read_cpu_temp(self):
+        """Read CPU temperature from the configured thermal sensor."""
+        if not self._thermal_path:
+            return None
+        try:
+            with open(self._thermal_path, "r") as f:
+                return int(f.read().strip()) / 1000.0
+        except (OSError, ValueError):
+            return None
 
     def _health_loop(self):
         """Periodic health check loop."""
@@ -108,15 +127,6 @@ class HealthMonitor:
                 sock.close()
         except Exception:
             pass  # Watchdog notification is best-effort
-
-
-def _read_cpu_temp():
-    """Read CPU temperature from thermal zone."""
-    try:
-        with open("/sys/class/thermal/thermal_zone0/temp", "r") as f:
-            return int(f.read().strip()) / 1000.0
-    except (OSError, ValueError):
-        return None
 
 
 def _get_disk_free_mb(path):

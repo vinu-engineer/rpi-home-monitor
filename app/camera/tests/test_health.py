@@ -3,19 +3,19 @@ import os
 import pytest
 from unittest.mock import patch, MagicMock, mock_open
 
-from camera_streamer.health import HealthMonitor, _read_cpu_temp, _get_disk_free_mb
+from camera_streamer.health import HealthMonitor, _get_disk_free_mb
 
 
 class TestHealthMonitor:
     """Test health monitoring."""
 
-    def _make_monitor(self, camera_config):
+    def _make_monitor(self, camera_config, thermal_path=None):
         """Create a HealthMonitor with mock capture/stream."""
         capture = MagicMock()
         capture.available = True
         stream = MagicMock()
         stream.is_streaming = True
-        return HealthMonitor(camera_config, capture, stream)
+        return HealthMonitor(camera_config, capture, stream, thermal_path=thermal_path)
 
     def test_not_running_initially(self, camera_config):
         """Should not be running before start()."""
@@ -23,10 +23,9 @@ class TestHealthMonitor:
         assert mon.is_running is False
 
     @patch("camera_streamer.health._get_disk_free_mb", return_value=500)
-    @patch("camera_streamer.health._read_cpu_temp", return_value=45.0)
-    def test_get_status(self, mock_temp, mock_disk, camera_config):
+    def test_get_status(self, mock_disk, camera_config):
         """get_status() should return health dict."""
-        mon = self._make_monitor(camera_config)
+        mon = self._make_monitor(camera_config, thermal_path=None)
         status = mon.get_status()
         assert "camera_available" in status
         assert "streaming" in status
@@ -38,10 +37,19 @@ class TestHealthMonitor:
         assert status["streaming"] is True
         assert status["server_configured"] is True
         assert status["camera_id"] == "cam-test001"
+        # No thermal path, so cpu_temp should be None
+        assert status["cpu_temp"] is None
 
     @patch("camera_streamer.health._get_disk_free_mb", return_value=500)
-    @patch("camera_streamer.health._read_cpu_temp", return_value=None)
-    def test_get_status_unconfigured(self, mock_temp, mock_disk, tmp_path):
+    def test_get_status_with_thermal(self, mock_disk, camera_config):
+        """get_status() should read temperature when thermal_path set."""
+        mon = self._make_monitor(camera_config, thermal_path="/fake/thermal")
+        with patch("builtins.open", mock_open(read_data="55000\n")):
+            status = mon.get_status()
+        assert status["cpu_temp"] == 55.0
+
+    @patch("camera_streamer.health._get_disk_free_mb", return_value=500)
+    def test_get_status_unconfigured(self, mock_disk, tmp_path):
         """Status should show unconfigured state."""
         for d in ["config", "certs", "logs"]:
             (tmp_path / d).mkdir()
@@ -68,19 +76,37 @@ class TestHealthMonitor:
         assert mon.is_running is False
 
 
-class TestCpuTemp:
-    """Test CPU temperature reading."""
+class TestReadCpuTemp:
+    """Test CPU temperature reading via HealthMonitor.read_cpu_temp()."""
+
+    def _make_monitor_with_thermal(self, thermal_path):
+        config = MagicMock()
+        capture = MagicMock()
+        stream = MagicMock()
+        return HealthMonitor(config, capture, stream, thermal_path=thermal_path)
 
     def test_reads_temp(self):
         """Should read temperature from thermal zone."""
-        from unittest.mock import mock_open
+        mon = self._make_monitor_with_thermal("/fake/thermal")
         with patch("builtins.open", mock_open(read_data="45000\n")):
-            assert _read_cpu_temp() == 45.0
+            assert mon.read_cpu_temp() == 45.0
+
+    def test_returns_none_when_no_path(self):
+        """Should return None when thermal_path is None."""
+        mon = self._make_monitor_with_thermal(None)
+        assert mon.read_cpu_temp() is None
 
     def test_returns_none_on_error(self):
         """Should return None when file unavailable."""
+        mon = self._make_monitor_with_thermal("/fake/thermal")
         with patch("builtins.open", side_effect=OSError):
-            assert _read_cpu_temp() is None
+            assert mon.read_cpu_temp() is None
+
+    def test_returns_none_on_bad_data(self):
+        """Should return None when file has non-numeric data."""
+        mon = self._make_monitor_with_thermal("/fake/thermal")
+        with patch("builtins.open", mock_open(read_data="not_a_number\n")):
+            assert mon.read_cpu_temp() is None
 
 
 class TestDiskFree:
@@ -90,7 +116,6 @@ class TestDiskFree:
         """Should return an integer for valid path."""
         if not hasattr(os, "statvfs"):
             # Windows doesn't have statvfs — mock it
-            from unittest.mock import patch, MagicMock
             mock_stat = MagicMock()
             mock_stat.f_bavail = 1024 * 1024
             mock_stat.f_frsize = 4096
@@ -104,7 +129,6 @@ class TestDiskFree:
     def test_returns_none_on_error(self):
         """Should return None for invalid path."""
         if not hasattr(os, "statvfs"):
-            from unittest.mock import patch
             with patch("os.statvfs", side_effect=OSError, create=True):
                 result = _get_disk_free_mb("/nonexistent/path/xyz")
         else:

@@ -35,6 +35,43 @@
     </div>
 </div>
 
+<!-- WiFi Network (admin only) -->
+<div class="settings-section" id="section-wifi" style="display:none;">
+    <div class="settings-section__title">WiFi Network</div>
+    <div class="card">
+        <div class="info-row">
+            <span class="info-row__label">Current Network</span>
+            <span class="info-row__value" id="wifi-current-ssid">--</span>
+        </div>
+        <div style="border-bottom:none; padding-top: 8px;">
+            <button class="btn btn--secondary btn--small" id="btn-change-wifi">Change WiFi</button>
+        </div>
+    </div>
+
+    <!-- Change WiFi Form (hidden by default) -->
+    <div class="inline-form" id="wifi-form-wrap">
+        <div class="card" style="margin-top: 12px;">
+            <div class="msg msg--warn" style="background:#78350f; color:#fde68a; padding:10px; border-radius:6px; margin-bottom:12px; font-size:0.85em;">
+                Warning: Changing WiFi will briefly disconnect the server. Make sure you are on the same network or have physical access.
+            </div>
+            <div id="wifi-net-list" style="max-height:200px; overflow-y:auto; margin-bottom:12px;"></div>
+            <button type="button" class="btn btn--secondary btn--small" id="btn-scan-wifi" style="margin-bottom:12px;">Scan for Networks</button>
+            <form id="form-wifi-connect">
+                <div class="form-group">
+                    <label for="wifi-ssid">WiFi Name (SSID)</label>
+                    <input type="text" id="wifi-ssid" class="form-input" required>
+                </div>
+                <div class="form-group">
+                    <label for="wifi-pass">WiFi Password</label>
+                    <input type="password" id="wifi-pass" class="form-input" required>
+                </div>
+                <button type="submit" class="btn btn--primary btn--small">Connect</button>
+                <button type="button" class="btn btn--secondary btn--small" id="btn-cancel-wifi" style="margin-left:8px;">Cancel</button>
+            </form>
+        </div>
+    </div>
+</div>
+
 <!-- User Management (admin only) -->
 <div class="settings-section" id="section-user-mgmt" style="display:none;">
     <div class="flex-between">
@@ -151,8 +188,10 @@
         if (isAdmin) {
             document.getElementById('section-system-settings').style.display = '';
             document.getElementById('section-user-mgmt').style.display = '';
+            document.getElementById('section-wifi').style.display = '';
             loadSettings();
             loadUsers();
+            loadWifi();
         }
 
         loadSystemInfo();
@@ -255,6 +294,31 @@
             });
     }
 
+    /* --- WiFi --- */
+    function loadWifi() {
+        window.HM.api.get('/api/v1/settings/wifi')
+            .then(function(data) {
+                document.getElementById('wifi-current-ssid').textContent = data.current_ssid || 'Not connected';
+                if (data.networks && data.networks.length > 0) {
+                    renderWifiNetworks(data.networks);
+                }
+            })
+            .catch(function() {
+                document.getElementById('wifi-current-ssid').textContent = 'Error';
+            });
+    }
+
+    function renderWifiNetworks(nets) {
+        var list = document.getElementById('wifi-net-list');
+        var html = '';
+        nets.forEach(function(n) {
+            html += '<div style="padding:8px 10px;border-bottom:1px solid #0f3460;cursor:pointer;display:flex;justify-content:space-between;align-items:center;" onclick="document.getElementById(\'wifi-ssid\').value=\'' + window.HM.escapeHtml(n.ssid).replace(/'/g, "\\'") + '\';document.getElementById(\'wifi-pass\').focus();">' +
+                '<span style="font-weight:500;">' + window.HM.escapeHtml(n.ssid) + '</span>' +
+                '<span style="color:#4ade80;font-size:0.85em;">' + n.signal + '%</span></div>';
+        });
+        list.innerHTML = html;
+    }
+
     /* --- Event Bindings --- */
     function bindEvents() {
         // Save Settings
@@ -323,6 +387,62 @@
                     })
                     .catch(function(err) {
                         window.HM.toast(err.message || 'Failed to create user', 'error');
+                    });
+            });
+        }
+
+        // WiFi change
+        var btnChangeWifi = document.getElementById('btn-change-wifi');
+        var wifiFormWrap = document.getElementById('wifi-form-wrap');
+        var btnCancelWifi = document.getElementById('btn-cancel-wifi');
+        var btnScanWifi = document.getElementById('btn-scan-wifi');
+        var formWifi = document.getElementById('form-wifi-connect');
+
+        if (btnChangeWifi) {
+            btnChangeWifi.addEventListener('click', function() {
+                wifiFormWrap.classList.toggle('visible');
+            });
+        }
+        if (btnCancelWifi) {
+            btnCancelWifi.addEventListener('click', function() {
+                wifiFormWrap.classList.remove('visible');
+            });
+        }
+        if (btnScanWifi) {
+            btnScanWifi.addEventListener('click', function() {
+                btnScanWifi.disabled = true;
+                btnScanWifi.textContent = 'Scanning...';
+                window.HM.api.get('/api/v1/settings/wifi')
+                    .then(function(data) {
+                        if (data.networks) renderWifiNetworks(data.networks);
+                        btnScanWifi.disabled = false;
+                        btnScanWifi.textContent = 'Scan for Networks';
+                    })
+                    .catch(function() {
+                        window.HM.toast('Scan failed', 'error');
+                        btnScanWifi.disabled = false;
+                        btnScanWifi.textContent = 'Scan for Networks';
+                    });
+            });
+        }
+        if (formWifi) {
+            formWifi.addEventListener('submit', function(e) {
+                e.preventDefault();
+                var ssid = document.getElementById('wifi-ssid').value.trim();
+                var pass = document.getElementById('wifi-pass').value;
+                if (!ssid) { window.HM.toast('Enter WiFi SSID', 'error'); return; }
+                if (!pass) { window.HM.toast('Enter WiFi password', 'error'); return; }
+
+                if (!confirm('Changing WiFi will briefly disconnect the server. Continue?')) return;
+
+                window.HM.api.post('/api/v1/settings/wifi', { ssid: ssid, password: pass })
+                    .then(function() {
+                        window.HM.toast('WiFi changed to ' + ssid, 'success');
+                        wifiFormWrap.classList.remove('visible');
+                        loadWifi();
+                    })
+                    .catch(function(err) {
+                        window.HM.toast(err.message || 'WiFi change failed', 'error');
                     });
             });
         }

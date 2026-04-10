@@ -358,6 +358,432 @@ class WifiSetupServer:
             pass
 
 
+class CameraStatusServer:
+    """Lightweight HTTP server showing camera status after setup.
+
+    Runs on port 80 and shows camera ID, WiFi, server connection,
+    stream status, and a form to change WiFi.
+    """
+
+    def __init__(self, config, stream_manager=None):
+        self._config = config
+        self._stream = stream_manager
+        self._server = None
+        self._thread = None
+
+    def start(self):
+        """Start the status HTTP server on port 80."""
+        handler = _make_status_handler(self._config, self._stream, self)
+        try:
+            self._server = http.server.HTTPServer(("0.0.0.0", LISTEN_PORT), handler)
+            self._thread = threading.Thread(
+                target=self._server.serve_forever, daemon=True, name="status-http"
+            )
+            self._thread.start()
+            log.info("Status server listening on port %d", LISTEN_PORT)
+            return True
+        except Exception as e:
+            log.error("Failed to start status server: %s", e)
+            return False
+
+    def stop(self):
+        """Stop the status HTTP server."""
+        if self._server:
+            self._server.shutdown()
+            self._server = None
+            log.info("Status server stopped")
+
+    def connect_wifi(self, ssid, password):
+        """Connect to a new WiFi network. Returns (ok, error)."""
+        try:
+            result = subprocess.run(
+                ["nmcli", "device", "wifi", "connect", ssid,
+                 "password", password, "ifname", IFACE],
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode == 0:
+                return True, ""
+            err = result.stderr.strip() or result.stdout.strip()
+            return False, err
+        except subprocess.TimeoutExpired:
+            return False, "Connection timed out"
+        except Exception as e:
+            return False, str(e)
+
+
+def _make_status_handler(config, stream_manager, status_server):
+    """Create HTTP handler for the camera status page."""
+
+    class StatusHandler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, format, *args):
+            log.debug("Status HTTP: " + format % args)
+
+        def do_GET(self):
+            if self.path == "/" or self.path == "/status":
+                self._serve_status_page()
+            elif self.path == "/api/status":
+                self._json_response(self._get_status())
+            elif self.path == "/api/networks":
+                nets = self._scan_networks()
+                self._json_response({"networks": nets})
+            else:
+                self.send_response(302)
+                self.send_header("Location", "/")
+                self.end_headers()
+
+        def do_POST(self):
+            content_len = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_len) if content_len > 0 else b""
+
+            if self.path == "/api/wifi":
+                try:
+                    data = json.loads(body)
+                    ssid = data.get("ssid", "").strip()
+                    password = data.get("password", "")
+                    if not ssid:
+                        self._json_response({"error": "SSID required"}, 400)
+                        return
+                    if not password:
+                        self._json_response({"error": "Password required"}, 400)
+                        return
+
+                    ok, err = status_server.connect_wifi(ssid, password)
+                    if ok:
+                        self._json_response({"message": f"Connected to {ssid}"})
+                    else:
+                        self._json_response({"error": err or "Connection failed"}, 500)
+                except json.JSONDecodeError:
+                    self._json_response({"error": "Invalid JSON"}, 400)
+            else:
+                self.send_error(404)
+
+        def _get_status(self):
+            """Collect camera status info."""
+            # Current WiFi SSID
+            current_ssid = ""
+            try:
+                r = subprocess.run(
+                    ["nmcli", "-t", "-f", "active,ssid", "device", "wifi"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                for line in r.stdout.strip().splitlines():
+                    parts = line.split(":", 1)
+                    if len(parts) == 2 and parts[0].lower() == "yes":
+                        current_ssid = parts[1]
+                        break
+            except Exception:
+                pass
+
+            # IP address
+            ip_addr = ""
+            try:
+                r = subprocess.run(
+                    ["nmcli", "-t", "-f", "IP4.ADDRESS", "device", "show", "wlan0"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                for line in r.stdout.strip().splitlines():
+                    if line.startswith("IP4.ADDRESS") and "/" in line:
+                        ip_addr = line.split(":", 1)[1].split("/")[0]
+                        break
+            except Exception:
+                pass
+
+            # Hostname
+            hostname = ""
+            try:
+                r = subprocess.run(
+                    ["hostname"], capture_output=True, text=True, timeout=5,
+                )
+                hostname = r.stdout.strip()
+            except Exception:
+                pass
+
+            # Server connection — try resolving server address
+            server_connected = False
+            server_addr = config.server_ip or "unknown"
+            if config.server_ip:
+                import socket
+                try:
+                    socket.gethostbyname(config.server_ip)
+                    server_connected = True
+                except socket.gaierror:
+                    pass
+
+            # Stream status
+            streaming = False
+            if stream_manager:
+                streaming = stream_manager.is_streaming
+
+            return {
+                "camera_id": config.camera_id,
+                "hostname": hostname,
+                "ip_address": ip_addr,
+                "wifi_ssid": current_ssid,
+                "server_address": server_addr,
+                "server_connected": server_connected,
+                "streaming": streaming,
+            }
+
+        def _scan_networks(self):
+            """Quick WiFi scan."""
+            try:
+                subprocess.run(
+                    ["nmcli", "device", "wifi", "rescan"],
+                    capture_output=True, timeout=10,
+                )
+                time.sleep(2)
+                r = subprocess.run(
+                    ["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY", "device", "wifi", "list"],
+                    capture_output=True, text=True, timeout=15,
+                )
+                networks = []
+                seen = set()
+                for line in r.stdout.strip().splitlines():
+                    parts = line.split(":", 2)
+                    if len(parts) >= 3 and parts[0] and parts[0] not in seen:
+                        seen.add(parts[0])
+                        networks.append({
+                            "ssid": parts[0],
+                            "signal": int(parts[1]) if parts[1].isdigit() else 0,
+                            "security": parts[2],
+                        })
+                networks.sort(key=lambda n: n["signal"], reverse=True)
+                return networks
+            except Exception:
+                return []
+
+        def _json_response(self, data, code=200):
+            body = json.dumps(data).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _serve_status_page(self):
+            html = _STATUS_HTML.replace("{{CAMERA_ID}}", config.camera_id)
+            body = html.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    return StatusHandler
+
+
+_STATUS_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Camera Status</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+       background: #1a1a2e; color: #eee; min-height: 100vh;
+       display: flex; flex-direction: column; align-items: center; }
+.container { max-width: 400px; width: 100%; padding: 20px; }
+h1 { text-align: center; color: #e94560; margin: 30px 0 6px; font-size: 1.5em; }
+.cam-id { text-align: center; color: #666; font-size: 0.8em; margin-bottom: 24px; }
+.card { background: #16213e; border-radius: 12px; padding: 20px; margin: 12px 0; }
+.card h3 { margin-bottom: 12px; font-size: 1.1em; }
+.info-row { display: flex; justify-content: space-between; padding: 10px 0;
+  border-bottom: 1px solid #0f3460; }
+.info-row:last-child { border-bottom: none; }
+.info-label { color: #8090b0; font-size: 0.9em; }
+.info-value { font-weight: 500; }
+.status-ok { color: #4ade80; }
+.status-err { color: #f87171; }
+label { display: block; margin: 12px 0 4px; color: #8090b0; font-size: 0.85em; }
+input[type=text], input[type=password] {
+  width: 100%; padding: 12px; border: 1px solid #2a3a5e; border-radius: 8px;
+  background: #0f3460; color: #eee; font-size: 1em; outline: none; }
+input:focus { border-color: #e94560; }
+.btn { display: block; width: 100%; padding: 14px; border: none; border-radius: 10px;
+  font-size: 1em; font-weight: 600; cursor: pointer; margin-top: 14px; }
+.btn-primary { background: #e94560; color: #fff; }
+.btn-primary:hover { background: #d63851; }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-secondary { background: #0f3460; color: #b0b0c0; margin-top: 8px; }
+.btn-secondary:hover { background: #133a6a; }
+.network-list { max-height: 200px; overflow-y: auto; margin: 8px 0; }
+.net { padding: 10px 12px; border-bottom: 1px solid #0f3460; cursor: pointer;
+  display: flex; justify-content: space-between; align-items: center; }
+.net:hover { background: #0f3460; border-radius: 6px; }
+.msg { text-align: center; padding: 12px; border-radius: 8px; margin: 8px 0; font-size: 0.9em; }
+.msg-ok { background: #065f46; color: #d1fae5; }
+.msg-err { background: #7f1d1d; color: #fecaca; }
+.msg-warn { background: #78350f; color: #fde68a; }
+#wifi-form { display: none; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Camera Status</h1>
+  <p class="cam-id">{{CAMERA_ID}}</p>
+
+  <div class="card">
+    <h3>Device Info</h3>
+    <div class="info-row">
+      <span class="info-label">Hostname</span>
+      <span class="info-value" id="s-hostname">--</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">IP Address</span>
+      <span class="info-value" id="s-ip">--</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">WiFi Network</span>
+      <span class="info-value" id="s-wifi">--</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Connection Status</h3>
+    <div class="info-row">
+      <span class="info-label">Server</span>
+      <span class="info-value" id="s-server">--</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Stream</span>
+      <span class="info-value" id="s-stream">--</span>
+    </div>
+  </div>
+
+  <button class="btn btn-secondary" id="btn-wifi" onclick="toggleWifi()">Change WiFi</button>
+
+  <div id="wifi-form">
+    <div class="card">
+      <h3>Change WiFi Network</h3>
+      <div class="msg msg-warn">Warning: Changing WiFi will briefly disconnect the camera.</div>
+      <div id="net-list" class="network-list"></div>
+      <button class="btn btn-secondary" onclick="scanNetworks()" id="btn-scan" style="margin-bottom:8px;">Scan for Networks</button>
+      <label>WiFi Name (SSID)</label>
+      <input type="text" id="in-ssid" placeholder="Network name">
+      <label>WiFi Password</label>
+      <input type="password" id="in-pass" placeholder="Password">
+      <button class="btn btn-primary" id="btn-connect" onclick="doConnect()">Connect</button>
+      <div id="wifi-result"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+function $(id) { return document.getElementById(id); }
+
+function loadStatus() {
+  fetch('/api/status')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      $('s-hostname').textContent = d.hostname || '--';
+      $('s-ip').textContent = d.ip_address || '--';
+      $('s-wifi').textContent = d.wifi_ssid || 'Not connected';
+
+      var serverEl = $('s-server');
+      if (d.server_connected) {
+        serverEl.textContent = d.server_address + ' (connected)';
+        serverEl.className = 'info-value status-ok';
+      } else {
+        serverEl.textContent = d.server_address + ' (disconnected)';
+        serverEl.className = 'info-value status-err';
+      }
+
+      var streamEl = $('s-stream');
+      if (d.streaming) {
+        streamEl.textContent = 'Streaming';
+        streamEl.className = 'info-value status-ok';
+      } else {
+        streamEl.textContent = 'Not streaming';
+        streamEl.className = 'info-value status-err';
+      }
+    })
+    .catch(function() {});
+}
+
+function toggleWifi() {
+  var form = $('wifi-form');
+  form.style.display = form.style.display === 'none' ? 'block' : 'none';
+}
+
+function scanNetworks() {
+  var btn = $('btn-scan');
+  btn.disabled = true;
+  btn.textContent = 'Scanning...';
+  $('net-list').innerHTML = '';
+
+  fetch('/api/networks')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      var nets = d.networks || [];
+      var html = '';
+      nets.forEach(function(n) {
+        html += '<div class="net" onclick="pickNet(\\''+esc(n.ssid)+'\\')"><span>'+esc(n.ssid)+'</span><span style="color:#4ade80;font-size:0.85em">'+n.signal+'%</span></div>';
+      });
+      $('net-list').innerHTML = html || '<div class="msg" style="color:#8090b0">No networks found</div>';
+      btn.disabled = false;
+      btn.textContent = 'Scan for Networks';
+    })
+    .catch(function() {
+      btn.disabled = false;
+      btn.textContent = 'Scan for Networks';
+      $('net-list').innerHTML = '<div class="msg msg-err">Scan failed</div>';
+    });
+}
+
+function pickNet(ssid) {
+  $('in-ssid').value = ssid;
+  $('in-pass').focus();
+}
+
+function doConnect() {
+  var ssid = $('in-ssid').value.trim();
+  var pass = $('in-pass').value;
+  if (!ssid) { alert('Enter WiFi name'); return; }
+  if (!pass) { alert('Enter WiFi password'); return; }
+
+  $('btn-connect').disabled = true;
+  $('btn-connect').textContent = 'Connecting...';
+  $('wifi-result').innerHTML = '';
+
+  fetch('/api/wifi', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ssid: ssid, password: pass})
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(d) {
+    $('btn-connect').disabled = false;
+    $('btn-connect').textContent = 'Connect';
+    if (d.error) {
+      $('wifi-result').innerHTML = '<div class="msg msg-err">' + esc(d.error) + '</div>';
+    } else {
+      $('wifi-result').innerHTML = '<div class="msg msg-ok">' + esc(d.message || 'Connected!') + '</div>';
+      setTimeout(loadStatus, 2000);
+    }
+  })
+  .catch(function() {
+    $('btn-connect').disabled = false;
+    $('btn-connect').textContent = 'Connect';
+    $('wifi-result').innerHTML = '<div class="msg msg-err">Request failed — camera may have changed networks. Try reconnecting.</div>';
+  });
+}
+
+function esc(s) {
+  var d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML.replace(/'/g, "\\\\'");
+}
+
+// Load on start, then refresh every 10s
+loadStatus();
+setInterval(loadStatus, 10000);
+</script>
+</body>
+</html>
+"""
+
+
 def _make_handler(config, setup_server):
     """Create an HTTP request handler with access to config/setup."""
 

@@ -53,6 +53,55 @@ def _resolve_server(config):
         )
 
 
+def _wait_for_wifi_connectivity(timeout=60):
+    """Wait up to timeout seconds for wlan0 to have an IP address.
+
+    Returns True if connected, False if timed out.
+    """
+    import subprocess
+    log.info("Checking WiFi connectivity (timeout=%ds)...", timeout)
+    for elapsed in range(timeout):
+        if _shutdown:
+            return True  # Don't block shutdown
+        try:
+            result = subprocess.run(
+                ["nmcli", "-t", "-f", "IP4.ADDRESS", "device", "show", "wlan0"],
+                capture_output=True, text=True, timeout=10,
+            )
+            for line in result.stdout.strip().splitlines():
+                if line.startswith("IP4.ADDRESS") and "/" in line:
+                    ip = line.split(":", 1)[1].split("/")[0]
+                    if ip and ip != "0.0.0.0":
+                        log.info("WiFi connected with IP %s after %ds", ip, elapsed)
+                        return True
+        except Exception:
+            pass
+        time.sleep(1)
+    log.warning("No WiFi IP after %ds", timeout)
+    return False
+
+
+def _revert_to_setup():
+    """Remove setup stamp and restart service to trigger setup wizard."""
+    import subprocess
+    stamp = "/data/.setup-done"
+    try:
+        if os.path.isfile(stamp):
+            os.remove(stamp)
+            log.info("Removed %s — next boot will start setup wizard", stamp)
+    except OSError as e:
+        log.error("Failed to remove setup stamp: %s", e)
+
+    log.info("Restarting camera-streamer service to enter setup mode...")
+    try:
+        subprocess.run(
+            ["systemctl", "restart", "camera-streamer"],
+            capture_output=True, timeout=10,
+        )
+    except Exception as e:
+        log.error("Failed to restart service: %s", e)
+
+
 def main():
     """Entry point for camera-streamer service."""
     global _shutdown
@@ -92,6 +141,12 @@ def main():
         config.load()
         log.info("Setup complete, continuing with startup")
 
+    # 2a. Verify WiFi connectivity after setup (fallback hotspot)
+    if not _wait_for_wifi_connectivity():
+        log.error("WiFi has no IP after 60s — reverting to setup mode")
+        _revert_to_setup()
+        return
+
     # 2b. Resolve server address (mDNS: homemonitor.local → IP)
     if config.is_configured:
         _resolve_server(config)
@@ -128,6 +183,11 @@ def main():
     else:
         log.warning("Server not configured — streaming disabled")
 
+    # 5b. Start status page HTTP server on port 80
+    from camera_streamer.wifi_setup import CameraStatusServer
+    status_server = CameraStatusServer(config, stream)
+    status_server.start()
+
     # 6. Start health monitoring
     from camera_streamer.health import HealthMonitor
     health = HealthMonitor(config, capture, stream)
@@ -149,6 +209,7 @@ def main():
     log.info("Shutting down...")
     health.stop()
     stream.stop()
+    status_server.stop()
     discovery.stop()
 
     log.info("Camera streamer stopped.")

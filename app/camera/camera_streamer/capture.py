@@ -83,18 +83,35 @@ class CaptureManager:
             )
 
         h264_ok = self.supports_h264()
-        log.info(
-            "Camera device %s ready — %d format(s), H.264=%s",
-            self._device,
-            len(self._formats),
-            "YES" if h264_ok else "NO (will try anyway)",
-        )
+        libcam = self.has_libcamera()
+        if h264_ok:
+            log.info(
+                "Camera device %s ready — %d format(s), native H.264=YES",
+                self._device, len(self._formats),
+            )
+        elif libcam:
+            log.info(
+                "Camera device %s ready — %d format(s), native H.264=NO, "
+                "libcamera-vid available (will handle ISP + encode)",
+                self._device, len(self._formats),
+            )
+        else:
+            log.warning(
+                "Camera device %s — no native H.264 and no libcamera-vid! "
+                "Streaming will likely fail.",
+                self._device,
+            )
         self._available = True
         return True
 
     def supports_h264(self):
-        """Check if the device supports H.264 output."""
+        """Check if the device supports native H.264 output."""
         return any("h264" in f.lower() or "H.264" in f for f in self._formats)
+
+    def has_libcamera(self):
+        """Check if libcamera-vid is available for ISP-based capture."""
+        import shutil
+        return shutil.which("libcamera-vid") is not None
 
     def supports_resolution(self, width, height):
         """Check if a specific resolution is listed in formats."""

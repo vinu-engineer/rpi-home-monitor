@@ -1,19 +1,23 @@
 """
 RTSP stream manager.
 
-Manages the ffmpeg process that captures video from v4l2
-and streams it to the home server over RTSP.
+Manages the video capture and RTSP streaming pipeline.
+
+The OV5647 sensor (PiHut ZeroCam) outputs raw Bayer data, NOT H.264.
+We use libcamera-vid to handle the full ISP pipeline:
+  Bayer → demosaic → YUV → H.264 encode (via GPU)
+
+Pipeline:
+  libcamera-vid (H.264 output to stdout) | ffmpeg (RTSP push to server)
+
+If libcamera-vid is not available, falls back to direct ffmpeg v4l2
+capture (works for cameras that output H.264 natively).
 
 Features:
 - Auto-reconnect on server disconnect (exponential backoff, max 60s)
-- Health monitoring (check ffmpeg process alive)
+- Health monitoring (check process alive)
 - Graceful shutdown on SIGTERM
 - Phase 2: mTLS client certificate for authentication (RTSPS)
-
-ffmpeg command:
-  ffmpeg -f v4l2 -input_format h264 -video_size 1920x1080 -framerate 25
-         -i /dev/video0 -c:v copy -f rtsp -rtsp_transport tcp
-         rtsp://<server>:8554/<stream-name>
 """
 import os
 import signal
@@ -35,6 +39,7 @@ class StreamManager:
     def __init__(self, config):
         self._config = config
         self._process = None
+        self._libcamera_proc = None
         self._running = False
         self._thread = None
         self._backoff = INITIAL_BACKOFF
@@ -99,8 +104,62 @@ class StreamManager:
                     return
                 time.sleep(0.1)
 
-    def _build_ffmpeg_cmd(self):
-        """Build the ffmpeg command line."""
+    def _has_libcamera(self):
+        """Check if libcamera-vid is available."""
+        import shutil
+        return shutil.which("libcamera-vid") is not None
+
+    def _build_libcamera_ffmpeg_cmd(self):
+        """Build libcamera-vid → TCP → ffmpeg pipeline.
+
+        libcamera-vid captures from the camera sensor via the ISP,
+        encodes to H.264 using the GPU, and listens on a TCP port.
+        ffmpeg connects to it and pushes the stream via RTSP.
+
+        Using TCP instead of pipe avoids ffmpeg's probe timing issues
+        with raw H.264 streams from stdin.
+        """
+        cfg = self._config
+        tcp_port = 8888
+
+        # libcamera-vid: capture H.264, serve on TCP
+        libcamera_cmd = [
+            "libcamera-vid",
+            "-t", "0",                    # run forever
+            "--width", str(cfg.width),
+            "--height", str(cfg.height),
+            "--framerate", str(cfg.fps),
+            "--codec", "h264",
+            "--profile", "high",
+            "--level", "4.2",
+            "--bitrate", "4000000",        # 4 Mbps
+            "--inline",                    # SPS/PPS with every keyframe
+            "--nopreview",
+            "--listen",                    # TCP server mode
+            "-o", f"tcp://0.0.0.0:{tcp_port}",
+        ]
+        # ffmpeg: read H.264 from TCP, push to RTSP
+        # Key: probesize must be large enough for ffmpeg to see a keyframe
+        # with SPS/PPS from libcamera-vid. At 4Mbps + 25fps, a keyframe
+        # arrives every ~2s, so we need 10-15MB of probe data.
+        ffmpeg_cmd = [
+            "ffmpeg",
+            "-nostdin",
+            "-use_wallclock_as_timestamps", "1",
+            "-fflags", "+genpts",
+            "-probesize", "15000000",      # 15MB — enough for 2+ keyframes
+            "-analyzeduration", "15000000",# 15s — wait for SPS/PPS
+            "-f", "h264",                  # tell ffmpeg it's raw H.264
+            "-i", f"tcp://127.0.0.1:{tcp_port}",
+            "-c:v", "copy",
+            "-f", "rtsp",
+            "-rtsp_transport", "tcp",
+            cfg.rtsp_url,
+        ]
+        return libcamera_cmd, ffmpeg_cmd
+
+    def _build_ffmpeg_only_cmd(self):
+        """Build direct ffmpeg v4l2 command (for cameras with native H.264)."""
         cfg = self._config
         cmd = [
             "ffmpeg",
@@ -118,9 +177,9 @@ class StreamManager:
         return cmd
 
     def _start_ffmpeg(self):
-        """Launch the ffmpeg process."""
-        cmd = self._build_ffmpeg_cmd()
-        log.info("Starting ffmpeg: %s", " ".join(cmd))
+        """Launch the streaming pipeline."""
+        import shutil
+
         log.info(
             "Stream config: device=/dev/video0 resolution=%dx%d fps=%d "
             "server=%s:%s camera_id=%s",
@@ -130,25 +189,69 @@ class StreamManager:
         )
         log.info("RTSP target URL: %s", self._config.rtsp_url)
 
-        # Check if ffmpeg is installed
-        import shutil
-        if not shutil.which("ffmpeg"):
-            log.error("ffmpeg binary not found in PATH — cannot stream")
-            return
-
         # Check if video device exists before starting
         if not os.path.exists("/dev/video0"):
             log.error("/dev/video0 not found — camera not detected")
             return
 
-        with self._lock:
-            self._process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                preexec_fn=os.setsid if hasattr(os, "setsid") else None,
-            )
-        log.info("ffmpeg started (PID %d)", self._process.pid)
+        if not shutil.which("ffmpeg"):
+            log.error("ffmpeg binary not found in PATH — cannot stream")
+            return
+
+        if self._has_libcamera():
+            # Use libcamera-vid pipeline (OV5647, IMX219, etc.)
+            libcamera_cmd, ffmpeg_cmd = self._build_libcamera_ffmpeg_cmd()
+            log.info("Using libcamera pipeline (sensor outputs raw Bayer)")
+            log.info("libcamera-vid: %s", " ".join(libcamera_cmd))
+            log.info("ffmpeg: %s", " ".join(ffmpeg_cmd))
+
+            with self._lock:
+                # Start libcamera-vid first (TCP server mode)
+                self._libcamera_proc = subprocess.Popen(
+                    libcamera_cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    preexec_fn=os.setsid if hasattr(os, "setsid") else None,
+                )
+            log.info("libcamera-vid started (PID %d), waiting for TCP...",
+                     self._libcamera_proc.pid)
+
+            # Wait for libcamera-vid to initialize camera + start TCP server
+            # OV5647 on Zero 2W needs ~3-5s to start producing frames
+            time.sleep(5)
+
+            if self._libcamera_proc.poll() is not None:
+                log.error("libcamera-vid exited early (code %d)",
+                          self._libcamera_proc.returncode)
+                return
+
+            with self._lock:
+                # Now start ffmpeg to connect to libcamera's TCP stream
+                self._process = subprocess.Popen(
+                    ffmpeg_cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    preexec_fn=os.setsid if hasattr(os, "setsid") else None,
+                )
+
+            log.info("ffmpeg started (PID %d), streaming to %s",
+                     self._process.pid, self._config.rtsp_url)
+        else:
+            # Direct ffmpeg v4l2 capture (camera outputs H.264 natively)
+            cmd = self._build_ffmpeg_only_cmd()
+            log.info("Using direct ffmpeg v4l2 capture (no libcamera)")
+            log.info("ffmpeg: %s", " ".join(cmd))
+
+            with self._lock:
+                self._libcamera_proc = None
+                self._process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    preexec_fn=os.setsid if hasattr(os, "setsid") else None,
+                )
+
+            log.info("ffmpeg started (PID %d)", self._process.pid)
 
     def _monitor_ffmpeg(self):
         """Wait for the ffmpeg process to finish. Resets backoff on success."""
@@ -189,24 +292,25 @@ class StreamManager:
             )
 
     def _kill_ffmpeg(self):
-        """Kill the ffmpeg process if running."""
+        """Kill the streaming pipeline (ffmpeg and libcamera-vid if running)."""
         with self._lock:
             proc = self._process
-        if proc is None:
-            return
+            libcam = getattr(self, "_libcamera_proc", None)
 
-        try:
-            # Try graceful termination first
-            proc.terminate()
+        for name, p in [("ffmpeg", proc), ("libcamera-vid", libcam)]:
+            if p is None:
+                continue
             try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                # Force kill
-                proc.kill()
-                proc.wait(timeout=2)
-            log.info("ffmpeg process terminated")
-        except OSError:
-            pass
-        finally:
-            with self._lock:
-                self._process = None
+                p.terminate()
+                try:
+                    p.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    p.kill()
+                    p.wait(timeout=2)
+                log.info("%s process terminated", name)
+            except OSError:
+                pass
+
+        with self._lock:
+            self._process = None
+            self._libcamera_proc = None

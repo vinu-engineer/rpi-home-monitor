@@ -22,17 +22,11 @@ else
     echo "WARNING: /data is NOT mounted — dirs will be on rootfs"
 fi
 
-# Set unique hostname using RPi serial suffix — avoids mDNS conflicts.
-# Format: homemonitor-XXXX where XXXX = last 4 hex digits of CPU serial.
-# The camera setup wizard shows this hostname so the user knows exactly
-# what to enter, or they can use the IP address instead.
-SERIAL=$(grep -oP 'Serial\s*:\s*\K[0-9a-f]+' /proc/cpuinfo 2>/dev/null || echo "")
-if [ -n "$SERIAL" ]; then
-    SUFFIX=$(echo "$SERIAL" | tail -c 5)
-    DESIRED_HOSTNAME="homemonitor-${SUFFIX}"
-else
-    DESIRED_HOSTNAME="homemonitor"
-fi
+# Set hostname to match the camera's default server address.
+# "rpi-divinu" is unique enough to avoid mDNS conflicts with generic
+# names like "raspberrypi" while being predictable — the camera setup
+# wizard defaults to rpi-divinu.local so it works out of the box.
+DESIRED_HOSTNAME="rpi-divinu"
 
 CURRENT_HOSTNAME=$(hostname 2>/dev/null)
 if [ "$CURRENT_HOSTNAME" != "$DESIRED_HOSTNAME" ]; then

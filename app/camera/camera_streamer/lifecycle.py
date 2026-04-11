@@ -176,16 +176,30 @@ class CameraLifecycle:
             log.info("Camera already paired — skipping pairing state")
             return True
 
-        log.info("Camera not paired — waiting for pairing via status page /pair")
+        log.info("Camera not paired — starting status server for /pair endpoint")
         led.setup_mode()
+
+        # Start status server so /pair endpoint is accessible
+        self._status_server = CameraStatusServer(
+            self._config,
+            stream_manager=None,
+            wifi_interface=self._platform.wifi_interface,
+            thermal_path=self._platform.thermal_path,
+            pairing_manager=self._pairing,
+        )
+        self._status_server.start()
 
         # Poll until paired or shutdown
         while not self._is_shutdown():
             if self._pairing.is_paired:
                 log.info("Pairing complete — certificates stored")
+                self._status_server.stop()
+                self._status_server = None
                 return True
             time.sleep(2)
 
+        self._status_server.stop()
+        self._status_server = None
         return False
 
     def _do_connecting(self):

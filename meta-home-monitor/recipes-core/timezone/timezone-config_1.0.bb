@@ -10,12 +10,8 @@ inherit allarch
 do_install() {
     install -d ${D}${sysconfdir}
     echo "UTC" > ${D}${sysconfdir}/timezone
-    install -d ${D}${datadir}/zoneinfo
-    ln -sf ../usr/share/zoneinfo/UTC ${D}${sysconfdir}/localtime
+    # Symlink to tzdata's zoneinfo (installed at /usr/share/zoneinfo by tzdata)
+    ln -sf /usr/share/zoneinfo/UTC ${D}${sysconfdir}/localtime
 }
 
 FILES:${PN} = "${sysconfdir}/timezone ${sysconfdir}/localtime"
-
-# Don't conflict with base-files
-RCONFLICTS:${PN} = ""
-ALLOW_EMPTY:${PN} = "1"

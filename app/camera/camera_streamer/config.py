@@ -90,6 +90,23 @@ class ConfigManager:
         return f"rtsp://{self.server_ip}:{self.server_port}/{path}"
 
     @property
+    def rtsps_url(self):
+        """Build the RTSPS URL for mTLS streaming to server.
+
+        Uses rtsps:// scheme and port 8322 (MediaMTX RTSPS default).
+        Only valid when client certs exist (camera is paired).
+        """
+        if not self.server_ip:
+            return ""
+        path = self.camera_id or self.stream_name
+        return f"rtsps://{self.server_ip}:8322/{path}"
+
+    @property
+    def has_client_cert(self):
+        """Return True if client certificate exists (camera is paired)."""
+        return os.path.isfile(os.path.join(self.certs_dir, "client.crt"))
+
+    @property
     def certs_dir(self):
         return os.path.join(self._data_dir, "certs")
 

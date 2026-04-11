@@ -104,6 +104,27 @@ class TestConfigManager:
         assert mgr.fps == 15
 
 
+class TestMTLSConfig:
+    """Test mTLS-related config properties."""
+
+    def test_rtsps_url(self, camera_config):
+        """Should build correct RTSPS URL."""
+        assert camera_config.rtsps_url == "rtsps://192.168.1.100:8322/cam-test001"
+
+    def test_rtsps_url_empty_when_no_server(self, unconfigured_config):
+        """RTSPS URL should be empty when server not configured."""
+        assert unconfigured_config.rtsps_url == ""
+
+    def test_has_client_cert_false(self, camera_config):
+        """has_client_cert should be False when no cert file."""
+        assert camera_config.has_client_cert is False
+
+    def test_has_client_cert_true(self, camera_config, data_dir):
+        """has_client_cert should be True when client.crt exists."""
+        (data_dir / "certs" / "client.crt").write_text("CERT")
+        assert camera_config.has_client_cert is True
+
+
 class TestPasswordManagement:
     """Test camera admin password hashing and verification."""
 

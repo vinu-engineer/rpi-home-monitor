@@ -76,6 +76,76 @@ class TestStreamManager:
         mgr._kill_ffmpeg()  # Should not raise
 
 
+class TestMTLSStreaming:
+    """Test mTLS support in StreamManager."""
+
+    def test_no_mtls_without_certs(self, camera_config):
+        """Should use plain RTSP when no client cert exists."""
+        mgr = StreamManager(camera_config)
+        assert mgr._use_mtls is False
+        assert mgr._stream_url.startswith("rtsp://")
+        assert mgr._tls_flags() == []
+
+    def test_mtls_with_certs(self, camera_config, data_dir):
+        """Should use RTSPS when client cert exists."""
+        certs = data_dir / "certs"
+        (certs / "client.crt").write_text("CERT")
+        (certs / "client.key").write_text("KEY")
+        (certs / "ca.crt").write_text("CA")
+
+        mgr = StreamManager(camera_config)
+        assert mgr._use_mtls is True
+        assert mgr._stream_url.startswith("rtsps://")
+
+    def test_tls_flags_with_certs(self, camera_config, data_dir):
+        """Should return TLS flags when certs exist."""
+        certs = data_dir / "certs"
+        (certs / "client.crt").write_text("CERT")
+        (certs / "client.key").write_text("KEY")
+        (certs / "ca.crt").write_text("CA")
+
+        mgr = StreamManager(camera_config)
+        flags = mgr._tls_flags()
+        assert "-tls_cert" in flags
+        assert "-tls_key" in flags
+        assert "-tls_ca_cert" in flags
+        assert str(certs / "client.crt") in flags
+        assert str(certs / "client.key") in flags
+        assert str(certs / "ca.crt") in flags
+
+    def test_ffmpeg_cmd_includes_tls_flags(self, camera_config, data_dir):
+        """ffmpeg command should include TLS flags when paired."""
+        certs = data_dir / "certs"
+        (certs / "client.crt").write_text("CERT")
+        (certs / "client.key").write_text("KEY")
+        (certs / "ca.crt").write_text("CA")
+
+        mgr = StreamManager(camera_config)
+        cmd = mgr._build_ffmpeg_only_cmd()
+        assert "-tls_cert" in cmd
+        assert "-tls_key" in cmd
+        assert "-tls_ca_cert" in cmd
+        # Should use rtsps:// URL
+        url = cmd[-1]
+        assert url.startswith("rtsps://")
+
+    def test_ffmpeg_cmd_no_tls_without_certs(self, camera_config):
+        """ffmpeg command should not include TLS flags when unpaired."""
+        mgr = StreamManager(camera_config)
+        cmd = mgr._build_ffmpeg_only_cmd()
+        assert "-tls_cert" not in cmd
+        url = cmd[-1]
+        assert url.startswith("rtsp://")
+
+    def test_rtsps_url_port(self, camera_config, data_dir):
+        """RTSPS URL should use port 8322."""
+        certs = data_dir / "certs"
+        (certs / "client.crt").write_text("CERT")
+
+        mgr = StreamManager(camera_config)
+        assert ":8322/" in mgr._stream_url
+
+
 class TestStreamBackoff:
     """Test reconnection backoff logic."""
 

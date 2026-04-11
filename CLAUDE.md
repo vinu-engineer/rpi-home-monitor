@@ -42,6 +42,21 @@ No DI containers, no event sourcing, no CQRS, no microservices, no plugin system
 
 Full pattern docs: [development-guide.md Section 3.6](docs/development-guide.md). Decision rationale: [docs/adr/](docs/adr/).
 
+### Yocto Build Rules
+
+- **Extend, don't reshape** — do not disturb the existing distro/layer structure unless there is a strong reason. Add cleanly.
+- **No `local.conf` hacks** — project logic and permanent settings go in distro config, image recipes, packagegroups, or machine config. `local.conf` is for per-developer overrides only.
+- **Layer branch matching** — all added layers must match our Yocto release branch (`scarthgap`). Never mix branches.
+- **Prefer maintained recipes** — use an existing recipe/layer first. Only create a custom recipe when no maintained option exists or project-specific behavior is required.
+- **Packagegroups for policy** — use packagegroups to group related packages. Don't grow `IMAGE_INSTALL` lists everywhere.
+- **Dev/prod separation** — debug tools, dev configs, and diagnostic packages go in `-dev` images only (via `home-*-image-dev.bb`), never in prod.
+- **Runtime prerequisites** — enable all of them: service units, kernel config, state paths, startup ordering, persistent storage dirs.
+- **Mutable state on `/data`** — keep runtime state out of rootfs. Logs, certs, config, recordings, VPN state all go on `/data` (persistent partition).
+- **Systemd ordering** — be explicit about `After=`, `Wants=`, `Requires=` for services that depend on network, time sync, mounts, or provisioning.
+- **No rootfs hacks** — avoid manual rootfs edits or post-install fixes outside the Yocto build. Everything goes through recipes.
+- **Document non-obvious choices** — add a comment explaining why each layer, recipe, or config choice was added.
+- **Build on VM** — all Yocto builds run on the GCP build VM in tmux/screen. Only copy final `.wic.bz2` images to the local PC for flashing.
+
 ## 3. Known Gaps
 
 Only what's NOT done. When you implement a gap, delete it from this list in the same PR.
@@ -114,6 +129,7 @@ One concern per PR. Follow Section 2 patterns. No drive-by refactors.
 | New service | + dedicated `test_svc_*.py` | `services/__init__.py` docstring |
 | Security-related | full suite + smoke test | `architecture.md` |
 | Yocto recipe | `bitbake -p` | — |
+| Release / version bump | `./scripts/generate-sbom.sh` | `sbom/*.cdx.json` |
 | Implement a gap | relevant tests | CLAUDE.md Section 3 (delete the gap) |
 
 ### Step 5: LINT
@@ -171,6 +187,8 @@ Deploy using Section 4 pattern. Run smoke test. Verify services are active.
 | Security model or data model change | `docs/architecture.md` |
 | Choice between alternatives with trade-offs | New `docs/adr/NNNN-<title>.md` |
 | User-facing feature change | `README.md` |
+| Release / Yocto rebuild | `./scripts/generate-sbom.sh` — regenerate `sbom/*.cdx.json` |
+| Dependency change (requirements.txt) | Regenerate SBOM, commit updated `sbom/*.cdx.json` |
 | Never hardcode test counts in docs | Say "run pytest" instead |
 | Never duplicate info that lives in `docs/` | Link to it |
 

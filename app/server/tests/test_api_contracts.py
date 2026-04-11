@@ -477,7 +477,18 @@ class TestSystemInfoContract:
         _login(app, client)
         resp = client.get("/api/v1/system/info")
         data = resp.get_json()
-        _assert_fields(data, {"hostname", "firmware_version", "uptime"})
+        _assert_fields(
+            data,
+            {
+                "hostname",
+                "firmware_version",
+                "uptime",
+                "os_name",
+                "os_version",
+                "os_build",
+                "os_variant",
+            },
+        )
 
 
 # ===========================================================================

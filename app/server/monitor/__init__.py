@@ -13,6 +13,7 @@ from flask import Flask
 from monitor.logging_config import configure_logging
 from monitor.services.audit import AuditLogger
 from monitor.services.camera_service import CameraService
+from monitor.services.pairing_service import PairingService
 from monitor.services.provisioning_service import ProvisioningService
 from monitor.services.recordings_service import RecordingsService
 from monitor.services.settings_service import SettingsService
@@ -167,6 +168,13 @@ def _init_services(app):
         audit=app.audit,
         live_dir=app.config["LIVE_DIR"],
         default_recordings_dir=recordings_dir,
+    )
+
+    # Pairing service — camera cert exchange and revocation
+    app.pairing_service = PairingService(
+        store=app.store,
+        audit=app.audit,
+        certs_dir=app.config["CERTS_DIR"],
     )
 
     # Settings service — system config + WiFi management

@@ -11,11 +11,9 @@ ID = "home-monitor"
 VERSION_ID = "${DISTRO_VERSION}"
 PRETTY_NAME = "Home Monitor OS ${DISTRO_VERSION} (${DISTRO_CODENAME})"
 HOME_URL = "https://github.com/vinu-engineer/rpi-home-monitor"
-VARIANT = "${@ 'Development' if d.getVar('IMAGE_BASENAME').endswith('-dev') else 'Production'}"
-VARIANT_ID = "${@ 'dev' if d.getVar('IMAGE_BASENAME').endswith('-dev') else 'prod'}"
 
 # BUILD_ID uses ISO 8601 date format (industry standard for build identification)
 BUILD_ID = "${DATE}"
 
 # Add all fields to output
-OS_RELEASE_FIELDS:append = " HOME_URL VERSION_ID BUILD_ID VARIANT VARIANT_ID"
+OS_RELEASE_FIELDS:append = " HOME_URL VERSION_ID BUILD_ID"

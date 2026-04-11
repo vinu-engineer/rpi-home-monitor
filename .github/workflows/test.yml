@@ -60,6 +60,7 @@ jobs:
 
       - name: Coverage report as PR comment
         if: github.event_name == 'pull_request'
+        continue-on-error: true
         uses: orgoro/coverage@v3.2
         with:
           coverageFile: app/server/coverage.xml
@@ -101,6 +102,7 @@ jobs:
 
       - name: Coverage report as PR comment
         if: github.event_name == 'pull_request'
+        continue-on-error: true
         uses: orgoro/coverage@v3.2
         with:
           coverageFile: app/camera/coverage.xml

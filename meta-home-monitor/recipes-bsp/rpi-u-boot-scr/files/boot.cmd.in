@@ -1,0 +1,70 @@
+# =============================================================
+# Home Monitor OS — U-Boot A/B Boot Script (ADR-0008)
+#
+# Partition layout:
+#   mmcblk0p1 = boot (FAT, this script + kernel + DTBs)
+#   mmcblk0p2 = rootfsA (ext4)
+#   mmcblk0p3 = rootfsB (ext4)
+#   mmcblk0p4 = data (ext4)
+#
+# U-Boot env vars (stored in uboot.env on boot FAT):
+#   boot_slot   = "A" or "B" (active slot)
+#   boot_count  = 0..bootlimit (incremented each boot attempt)
+#   bootlimit   = 3 (max retries before rollback)
+#   upgrade_available = 0 or 1 (set by SWUpdate after writing)
+# =============================================================
+
+echo "Home Monitor OS boot script"
+
+# Get firmware-provided device tree address
+fdt addr ${fdt_addr} && fdt get value bootargs /chosen bootargs
+
+# Initialize env defaults if first boot (no uboot.env yet)
+if test ! -e @@BOOT_MEDIA@@ 0:1 uboot.env; then
+    echo "First boot — initializing U-Boot environment"
+    setenv boot_slot A
+    setenv boot_count 0
+    setenv bootlimit 3
+    setenv upgrade_available 0
+    saveenv
+fi
+
+# --- Rollback logic ---
+if test "${upgrade_available}" = "1"; then
+    # Count boot attempts after an upgrade
+    setexpr boot_count ${boot_count} + 1
+    saveenv
+
+    if test ${boot_count} -ge ${bootlimit}; then
+        echo "ROLLBACK: boot_count (${boot_count}) >= bootlimit (${bootlimit})"
+        # Swap to other slot
+        if test "${boot_slot}" = "A"; then
+            setenv boot_slot B
+        else
+            setenv boot_slot A
+        fi
+        setenv boot_count 0
+        setenv upgrade_available 0
+        saveenv
+        echo "Rolled back to slot ${boot_slot}"
+    fi
+fi
+
+# --- Select root partition based on slot ---
+if test "${boot_slot}" = "B"; then
+    setenv rootpart /dev/mmcblk0p3
+    echo "Booting slot B (rootfsB, partition 3)"
+else
+    setenv rootpart /dev/mmcblk0p2
+    echo "Booting slot A (rootfsA, partition 2)"
+fi
+
+# Set kernel boot args — root= points to selected slot
+setenv bootargs "${bootargs} root=${rootpart} rootfstype=ext4 rootwait rw"
+
+# Load kernel from boot partition
+echo "Loading kernel @@KERNEL_IMAGETYPE@@..."
+fatload @@BOOT_MEDIA@@ 0:1 ${kernel_addr_r} @@KERNEL_IMAGETYPE@@
+
+# Boot
+@@KERNEL_BOOTCMD@@ ${kernel_addr_r} - ${fdt_addr}

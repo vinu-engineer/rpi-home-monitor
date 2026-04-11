@@ -67,11 +67,14 @@ app/
 │   │   ├── test_api_settings.py    ← Tests for api/settings.py
 │   │   ├── test_api_users.py       ← Tests for api/users.py
 │   │   ├── test_api_ota.py         ← Tests for api/ota.py
-│   │   ├── test_svc_recorder.py    ← Tests for services/recorder.py
+│   │   ├── test_svc_recorder.py    ← Tests for services/recorder_service.py
+│   │   ├── test_svc_recordings.py  ← Tests for services/recordings_service.py
 │   │   ├── test_svc_discovery.py   ← Tests for services/discovery.py
-│   │   ├── test_svc_storage.py     ← Tests for services/storage.py
+│   │   ├── test_svc_storage.py     ← Tests for services/storage_manager.py
 │   │   ├── test_svc_health.py      ← Tests for services/health.py
-│   │   └── test_svc_audit.py       ← Tests for services/audit.py
+│   │   ├── test_svc_audit.py       ← Tests for services/audit.py
+│   │   ├── test_api_contracts.py   ← Contract tests (Layer 4)
+│   │   └── test_security.py        ← Security regression tests (adversarial)
 │   ├── pytest.ini                  ← pytest config
 │   ├── requirements.txt            ← Runtime deps
 │   └── requirements-test.txt       ← Test deps (includes runtime)
@@ -610,6 +613,8 @@ def two_cameras(data_dir):
 | Descriptive names | `test_returns_404_for_unknown_camera` not `test_camera_4` |
 | API test files | `test_api_<blueprint>.py` (e.g., `test_api_cameras.py`) |
 | Service test files | `test_svc_<service>.py` (e.g., `test_svc_recorder.py`) |
+| Contract test files | `test_api_contracts.py` (one per app, Layer 4) |
+| Security test files | `test_security.py` (adversarial inputs, abuse cases) |
 
 ---
 

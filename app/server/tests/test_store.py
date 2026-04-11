@@ -1,8 +1,10 @@
 """Tests for the JSON persistence layer."""
+
 import json
 import threading
+
+from monitor.models import Camera, Settings, User
 from monitor.store import Store
-from monitor.models import Camera, User, Settings
 
 
 class TestStoreInit:
@@ -10,7 +12,7 @@ class TestStoreInit:
 
     def test_creates_config_dir(self, tmp_path):
         config_dir = tmp_path / "newdir"
-        store = Store(str(config_dir))
+        Store(str(config_dir))
         assert config_dir.exists()
 
     def test_works_with_existing_dir(self, data_dir):
@@ -240,11 +242,13 @@ class TestThreadSafety:
 
         def write_user(i):
             try:
-                store.save_user(User(
-                    id=f"user-{i:03d}",
-                    username=f"user{i}",
-                    password_hash=f"hash{i}",
-                ))
+                store.save_user(
+                    User(
+                        id=f"user-{i:03d}",
+                        username=f"user{i}",
+                        password_hash=f"hash{i}",
+                    )
+                )
             except Exception as e:
                 errors.append(e)
 

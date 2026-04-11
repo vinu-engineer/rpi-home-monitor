@@ -14,10 +14,9 @@ Note: Full mDNS browsing requires Avahi (Linux-only). This module
 provides the service interface; actual mDNS browsing runs only on
 the RPi hardware.
 """
-import threading
-import time
-from datetime import datetime, timezone
 
+import threading
+from datetime import UTC, datetime
 
 OFFLINE_TIMEOUT = 30  # seconds
 
@@ -44,7 +43,7 @@ class DiscoveryService:
         """
         from monitor.models import Camera
 
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         with self._lock:
             camera = self._store.get_camera(camera_id)
@@ -81,7 +80,7 @@ class DiscoveryService:
 
     def check_offline(self):
         """Mark cameras as offline if not seen recently."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         cameras = self._store.get_cameras()
 
         for camera in cameras:

@@ -1,7 +1,10 @@
 """Tests for the authentication module."""
+
 import time
+
 import pytest
-from monitor.auth import hash_password, check_password, _login_attempts
+
+from monitor.auth import _login_attempts, check_password, hash_password
 
 
 @pytest.fixture(autouse=True)
@@ -15,6 +18,7 @@ def clear_rate_limits():
 def _create_test_user(app):
     """Helper: create an admin user in the store."""
     from monitor.models import User
+
     user = User(
         id="user-admin",
         username="admin",
@@ -59,10 +63,13 @@ class TestLogin:
 
     def test_login_success(self, app, client):
         _create_test_user(app)
-        response = client.post("/api/v1/auth/login", json={
-            "username": "admin",
-            "password": "correct-password",
-        })
+        response = client.post(
+            "/api/v1/auth/login",
+            json={
+                "username": "admin",
+                "password": "correct-password",
+            },
+        )
         assert response.status_code == 200
         data = response.get_json()
         assert data["user"]["username"] == "admin"
@@ -71,17 +78,23 @@ class TestLogin:
 
     def test_login_wrong_password(self, app, client):
         _create_test_user(app)
-        response = client.post("/api/v1/auth/login", json={
-            "username": "admin",
-            "password": "wrong-password",
-        })
+        response = client.post(
+            "/api/v1/auth/login",
+            json={
+                "username": "admin",
+                "password": "wrong-password",
+            },
+        )
         assert response.status_code == 401
 
     def test_login_unknown_user(self, app, client):
-        response = client.post("/api/v1/auth/login", json={
-            "username": "nobody",
-            "password": "test",
-        })
+        response = client.post(
+            "/api/v1/auth/login",
+            json={
+                "username": "nobody",
+                "password": "test",
+            },
+        )
         assert response.status_code == 401
 
     def test_login_missing_fields(self, client):
@@ -102,10 +115,13 @@ class TestLogout:
 
     def test_logout_clears_session(self, app, client):
         _create_test_user(app)
-        client.post("/api/v1/auth/login", json={
-            "username": "admin",
-            "password": "correct-password",
-        })
+        client.post(
+            "/api/v1/auth/login",
+            json={
+                "username": "admin",
+                "password": "correct-password",
+            },
+        )
         response = client.post("/api/v1/auth/logout")
         assert response.status_code == 200
 
@@ -123,10 +139,13 @@ class TestMe:
 
     def test_me_authenticated(self, app, client):
         _create_test_user(app)
-        client.post("/api/v1/auth/login", json={
-            "username": "admin",
-            "password": "correct-password",
-        })
+        client.post(
+            "/api/v1/auth/login",
+            json={
+                "username": "admin",
+                "password": "correct-password",
+            },
+        )
         response = client.get("/api/v1/auth/me")
         assert response.status_code == 200
         data = response.get_json()
@@ -143,10 +162,13 @@ class TestSessionTimeout:
 
     def test_session_expires_after_idle_timeout(self, app, client):
         _create_test_user(app)
-        client.post("/api/v1/auth/login", json={
-            "username": "admin",
-            "password": "correct-password",
-        })
+        client.post(
+            "/api/v1/auth/login",
+            json={
+                "username": "admin",
+                "password": "correct-password",
+            },
+        )
 
         # Simulate idle timeout by manipulating session
         with client.session_transaction() as sess:
@@ -157,10 +179,13 @@ class TestSessionTimeout:
 
     def test_session_expires_after_absolute_timeout(self, app, client):
         _create_test_user(app)
-        client.post("/api/v1/auth/login", json={
-            "username": "admin",
-            "password": "correct-password",
-        })
+        client.post(
+            "/api/v1/auth/login",
+            json={
+                "username": "admin",
+                "password": "correct-password",
+            },
+        )
 
         # Simulate 25-hour-old session
         with client.session_transaction() as sess:
@@ -171,10 +196,13 @@ class TestSessionTimeout:
 
     def test_active_session_updates_last_active(self, app, client):
         _create_test_user(app)
-        client.post("/api/v1/auth/login", json={
-            "username": "admin",
-            "password": "correct-password",
-        })
+        client.post(
+            "/api/v1/auth/login",
+            json={
+                "username": "admin",
+                "password": "correct-password",
+            },
+        )
         before = time.time()
         client.get("/api/v1/auth/me")
         with client.session_transaction() as sess:
@@ -187,24 +215,33 @@ class TestRateLimiting:
     def test_allows_normal_attempts(self, app, client):
         _create_test_user(app)
         for _ in range(5):
-            response = client.post("/api/v1/auth/login", json={
-                "username": "admin",
-                "password": "wrong",
-            })
+            response = client.post(
+                "/api/v1/auth/login",
+                json={
+                    "username": "admin",
+                    "password": "wrong",
+                },
+            )
             assert response.status_code == 401
 
     def test_blocks_after_too_many_attempts(self, app, client):
         _create_test_user(app)
         for _ in range(10):
-            client.post("/api/v1/auth/login", json={
-                "username": "admin",
-                "password": "wrong",
-            })
+            client.post(
+                "/api/v1/auth/login",
+                json={
+                    "username": "admin",
+                    "password": "wrong",
+                },
+            )
 
-        response = client.post("/api/v1/auth/login", json={
-            "username": "admin",
-            "password": "correct-password",
-        })
+        response = client.post(
+            "/api/v1/auth/login",
+            json={
+                "username": "admin",
+                "password": "correct-password",
+            },
+        )
         assert response.status_code == 429
 
 
@@ -213,20 +250,26 @@ class TestCSRF:
 
     def test_login_returns_csrf_token(self, app, client):
         _create_test_user(app)
-        response = client.post("/api/v1/auth/login", json={
-            "username": "admin",
-            "password": "correct-password",
-        })
+        response = client.post(
+            "/api/v1/auth/login",
+            json={
+                "username": "admin",
+                "password": "correct-password",
+            },
+        )
         data = response.get_json()
         assert "csrf_token" in data
         assert len(data["csrf_token"]) > 0
 
     def test_me_returns_csrf_token(self, app, client):
         _create_test_user(app)
-        client.post("/api/v1/auth/login", json={
-            "username": "admin",
-            "password": "correct-password",
-        })
+        client.post(
+            "/api/v1/auth/login",
+            json={
+                "username": "admin",
+                "password": "correct-password",
+            },
+        )
         response = client.get("/api/v1/auth/me")
         data = response.get_json()
         assert "csrf_token" in data
@@ -241,9 +284,12 @@ class TestDecorators:
 
     def test_login_required_allows_authenticated(self, app, client):
         _create_test_user(app)
-        client.post("/api/v1/auth/login", json={
-            "username": "admin",
-            "password": "correct-password",
-        })
+        client.post(
+            "/api/v1/auth/login",
+            json={
+                "username": "admin",
+                "password": "correct-password",
+            },
+        )
         response = client.get("/api/v1/auth/me")
         assert response.status_code == 200

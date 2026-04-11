@@ -1,7 +1,9 @@
 """
 Tests for view routes — HTML page serving and redirects.
 """
+
 import os
+
 import pytest
 
 

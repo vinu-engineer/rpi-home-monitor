@@ -13,9 +13,8 @@ Warning thresholds:
 - Disk usage > 85%
 - RAM usage > 90%
 """
-import os
+
 import shutil
-import time
 from pathlib import Path
 
 
@@ -41,10 +40,8 @@ def get_cpu_usage() -> float:
     try:
         with open("/proc/stat") as f:
             line = f.readline()
-        values = list(map(int, line.split()[1:]))
-        idle = values[3]
-        total = sum(values)
-        # Need two samples — return 0 for single-call
+        values = list(map(int, line.split()[1:]))  # noqa: F841
+        # Need two samples for delta — return 0 for single-call
         return 0.0
     except (OSError, ValueError, IndexError):
         return 0.0
@@ -88,9 +85,9 @@ def get_disk_usage(path: str = "/data") -> dict:
     """
     try:
         usage = shutil.disk_usage(path)
-        total_gb = round(usage.total / (1024 ** 3), 1)
-        used_gb = round(usage.used / (1024 ** 3), 1)
-        free_gb = round(usage.free / (1024 ** 3), 1)
+        total_gb = round(usage.total / (1024**3), 1)
+        used_gb = round(usage.used / (1024**3), 1)
+        free_gb = round(usage.free / (1024**3), 1)
         percent = round(usage.used / usage.total * 100, 1) if usage.total > 0 else 0.0
         return {
             "total_gb": total_gb,

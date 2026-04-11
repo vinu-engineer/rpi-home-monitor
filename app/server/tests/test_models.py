@@ -1,6 +1,8 @@
 """Tests for data models."""
+
 from dataclasses import asdict
-from monitor.models import Camera, User, Settings, Clip
+
+from monitor.models import Camera, Clip, Settings, User
 
 
 class TestCamera:
@@ -82,7 +84,7 @@ class TestSettings:
         d = asdict(Settings())
         assert d["timezone"] == "Europe/Dublin"
         assert isinstance(d, dict)
-        assert len(d) == 7
+        assert len(d) == 9  # 7 original + usb_device + usb_recordings_dir
 
 
 class TestClip:

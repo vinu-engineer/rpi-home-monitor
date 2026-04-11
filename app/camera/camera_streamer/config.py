@@ -13,10 +13,11 @@ Config values:
   FPS            - Framerate (default: 25)
   CAMERA_ID      - Derived from hardware serial if not set
 """
+
 import hashlib
+import logging
 import os
 import secrets
-import logging
 
 log = logging.getLogger("camera-streamer.config")
 
@@ -30,7 +31,7 @@ DEFAULTS = {
     "FPS": "25",
     "CAMERA_ID": "",
     "ADMIN_USERNAME": "admin",  # default username
-    "ADMIN_PASSWORD": "",       # salt:hash (PBKDF2-SHA256)
+    "ADMIN_PASSWORD": "",  # salt:hash (PBKDF2-SHA256)
 }
 
 
@@ -38,9 +39,7 @@ class ConfigManager:
     """Load and manage camera configuration."""
 
     def __init__(self, data_dir=None):
-        self._data_dir = data_dir or os.environ.get(
-            "CAMERA_DATA_DIR", "/data"
-        )
+        self._data_dir = data_dir or os.environ.get("CAMERA_DATA_DIR", "/data")
         self._config_path = os.path.join(self._data_dir, "config", "camera.conf")
         self._default_path = "/opt/camera/camera.conf.default"
         self._values = dict(DEFAULTS)
@@ -183,7 +182,7 @@ class ConfigManager:
             return
         if os.path.isfile(self._default_path):
             os.makedirs(os.path.dirname(self._config_path), exist_ok=True)
-            with open(self._default_path, "r") as src:
+            with open(self._default_path) as src:
                 content = src.read()
             with open(self._config_path, "w") as dst:
                 dst.write(content)
@@ -191,7 +190,7 @@ class ConfigManager:
 
     def _parse_config(self, path):
         """Parse KEY=VALUE config file (shell-style, ignoring comments)."""
-        with open(path, "r") as f:
+        with open(path) as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith("#"):
@@ -208,7 +207,7 @@ class ConfigManager:
 def _get_hardware_serial():
     """Read the RPi hardware serial from /proc/cpuinfo."""
     try:
-        with open("/proc/cpuinfo", "r") as f:
+        with open("/proc/cpuinfo") as f:
             for line in f:
                 if line.startswith("Serial"):
                     serial = line.split(":")[-1].strip()
@@ -217,4 +216,5 @@ def _get_hardware_serial():
         pass
     # Fallback: use hostname
     import socket
+
     return f"cam-{socket.gethostname()}"

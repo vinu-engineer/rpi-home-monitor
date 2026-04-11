@@ -15,19 +15,21 @@ Two separate applications in `app/`:
 - `app/server/` = Flask web app (monitor-server) — runs on RPi 4B
 - `app/camera/` = Python streaming service (camera-streamer) — runs on Zero 2W
 
-## Video Pipeline (Fully Implemented)
+## Video Pipeline
 
 ```
-Camera (V4L2 /dev/video0) → FFmpeg (H.264 RTSP push)
+Camera (V4L2) → FFmpeg (H.264 RTSP push)
     → MediaMTX (:8554) on server
-        ├→ FFmpeg HLS    → /data/live/<cam-id>/stream.m3u8 (2s segments, rolling 5)
+        ├→ WebRTC (WHEP :8889) → browser <video> (sub-1s latency, live view)
         ├→ FFmpeg Record → /data/recordings/<cam-id>/YYYY-MM-DD/HH-MM-SS.mp4 (3-min clips)
         └→ FFmpeg Snap   → /data/live/<cam-id>/snapshot.jpg (every 30s)
+        └→ FFmpeg HLS    → /data/live/<cam-id>/stream.m3u8 (fallback only)
 
-Web browser → NGINX (:443 HTTPS) → HLS.js player
-    ├→ /live/<cam-id>/* → served direct from /data/live/
+Web browser → NGINX (:443 HTTPS)
+    ├→ /webrtc/<cam-id>/ → proxy to MediaMTX :8889 (WHEP, primary live view)
+    ├→ /live/<cam-id>/*  → HLS segments (fallback)
     ├→ /clips/<cam-id>/* → served direct from /data/recordings/
-    └→ /api/* → Flask (:5000)
+    └→ /api/*            → Flask (:5000)
 ```
 
 ## Custom Distro: `home-monitor`
@@ -54,6 +56,28 @@ We do NOT use `DISTRO = "poky"` (the reference distro). We have our own:
 - **MediaMTX** as RTSP relay server (port 8554)
 - **OS branding** — `/etc/os-release` shows "Home Monitor OS"
 
+## Design Patterns (Mandatory)
+
+Full rules in [`docs/development-guide.md`](docs/development-guide.md) Section 3.6.
+
+**Patterns we follow:**
+- **Single Responsibility** — one class per file, one concern per class. No god files (>300 lines).
+- **Service Layer** — business logic in service classes (`CameraService`, `StorageService`), routes are thin HTTP adapters.
+- **State Machine** — camera lifecycle as explicit states (`INIT → SETUP → CONNECTING → VALIDATING → RUNNING → SHUTDOWN`).
+- **Platform Provider** — `camera/platform.py` provides all hardware paths. Never hardcode `/dev/video0`, `/sys/class/leds/ACT`, `wlan0`, `thermal_zone0`.
+- **Strategy** — swappable backends via `typing.Protocol` (streaming, capture, detection, player).
+- **Constructor Injection** — pass deps in `__init__()`. No DI frameworks, no global registries.
+- **Fail-Silent Adapter** — all hardware access wrapped in try/except, fails gracefully.
+- **App Factory** — Flask `create_app()` decomposed into `_init_infrastructure`, `_init_services`, `_startup`, `_register_blueprints`.
+- **Repository** — `Store` class for JSON persistence with atomic writes.
+- **Observer/Callback** — simple callback for cross-service notifications (e.g., StorageManager → StreamingService dir change).
+
+**Patterns we NEVER use:**
+- No DI containers, no event sourcing, no CQRS, no microservices, no plugin systems, no ORM.
+
+**Live streaming:**
+- WebRTC (MediaMTX WHEP) for live view (sub-1s). HLS as fallback only. Recordings stay FFmpeg→MP4.
+
 ## Phases
 
 - **Phase 1:** Local-only. Single camera, live view, clip recording, web dashboard, auth, health, security, OTA-ready. **~95% complete.**
@@ -66,13 +90,14 @@ We do NOT use `DISTRO = "poky"` (the reference distro). We have our own:
 
 | Component | File(s) | Status | What It Does |
 |-----------|---------|--------|--------------|
-| App factory | `__init__.py` | COMPLETE | Creates Flask app, registers 8 blueprints, creates default admin user |
+| App factory | `__init__.py` | COMPLETE | Creates Flask app, decomposes into _init_infrastructure, _init_services, _startup, _register_blueprints |
 | Auth/CSRF | `auth.py` | COMPLETE | bcrypt (cost 12), sessions (30min idle/24hr max), rate limit (5/min), CSRF tokens |
 | Data models | `models.py` | COMPLETE | Camera, User, Settings, Clip dataclasses — no DB, JSON files |
 | JSON store | `store.py` | COMPLETE | Thread-safe JSON persistence with atomic writes (cameras.json, users.json, settings.json) |
 | Setup wizard | `provisioning.py` | COMPLETE | WiFi scan → save creds → admin password → apply all at once (PR #11 fix) |
 | Page routes | `views.py` | COMPLETE | /setup, /login, /dashboard, /live, /recordings, /settings — all auth-gated |
-| Camera API | `api/cameras.py` | COMPLETE | CRUD + confirm (starts streaming) + status |
+| Camera API | `api/cameras.py` | COMPLETE | Thin routes → delegates to CameraService |
+| Camera svc | `services/camera_service.py` | COMPLETE | Camera CRUD, lifecycle, streaming coordination, audit |
 | Auth API | `api/auth.py` (in __init__) | COMPLETE | Login/logout/me |
 | Live API | `api/live.py` | COMPLETE | `/live/<id>/stream.m3u8` (HLS playlist), `/live/<id>/snapshot` (JPEG) |
 | Recordings API | `api/recordings.py` | COMPLETE | List clips, filter by date, get latest, delete clip |
@@ -85,7 +110,11 @@ We do NOT use `DISTRO = "poky"` (the reference distro). We have our own:
 | Health svc | `services/health.py` | COMPLETE | CPU temp, RAM, disk, uptime. Warns at CPU>70C, disk>85%, RAM>90% |
 | Audit svc | `services/audit.py` | COMPLETE | Append-only JSON audit log at /data/logs/audit.log |
 | Discovery svc | `services/discovery.py` | PARTIAL | Camera online/offline tracking, pending camera reports |
-| Storage svc | `services/storage.py` | PARTIAL | Loop recording cleanup when disk >90% |
+| Storage svc | `services/storage.py` | COMPLETE | FIFO loop recording, background cleanup, USB/internal dir switching |
+| USB svc | `services/usb.py` | COMPLETE | USB detection (lsblk), mount/unmount, format to ext4, auto-mount |
+| Storage API | `api/storage.py` | COMPLETE | Thin routes → delegates to StorageService |
+| Storage svc | `services/storage_service.py` | COMPLETE | USB select, format, eject orchestration with audit |
+| Logging | `logging_config.py` | COMPLETE | RotatingFileHandler (10MB×5), console + file output |
 
 ### Server Templates (`app/server/monitor/templates/`)
 
@@ -116,14 +145,18 @@ We do NOT use `DISTRO = "poky"` (the reference distro). We have our own:
 
 | Component | File | Status | What It Does |
 |-----------|------|--------|--------------|
-| Entry point | `main.py` | COMPLETE | Config → setup check → hotspot/stream → Avahi → health monitor |
+| Entry point | `main.py` | COMPLETE | Thin: config load → platform detect → CameraLifecycle.run() |
+| Lifecycle | `lifecycle.py` | COMPLETE | State machine: INIT→SETUP→CONNECTING→VALIDATING→RUNNING→SHUTDOWN |
+| Platform | `platform.py` | COMPLETE | Hardware abstraction — detects device paths, LED, thermal, WiFi interface |
 | Config | `config.py` | COMPLETE | /data/config/camera.conf, auto-generates cam ID from hardware serial |
-| V4L2 capture | `capture.py` | COMPLETE | Detects /dev/video0, queries H.264 support, validates resolution |
+| V4L2 capture | `capture.py` | COMPLETE | Detects camera device, queries H.264 support, validates resolution |
 | RTSP stream | `stream.py` | COMPLETE | FFmpeg v4l2→RTSP push to server:8554, exponential backoff reconnect |
-| WiFi setup | `wifi_setup.py` | COMPLETE | "HomeCam-Setup" AP, HTTP server :80, collects WiFi+server IP, saves config |
-| LED control | `led.py` | COMPLETE | ACT LED patterns: setup(1s blink), connecting(200ms), connected(solid), error(100ms) |
+| WiFi setup | `wifi_setup.py` | COMPLETE | "HomeCam-Setup" AP, HTTP server :80, first-boot setup wizard |
+| Status server | `status_server.py` | COMPLETE | Post-setup status page with auth, WiFi change, system health |
+| WiFi utils | `wifi.py` | COMPLETE | Shared WiFi operations: scan, connect, hotspot start/stop |
+| LED control | `led.py` | COMPLETE | LedController class — patterns via sysfs, injectable path, fail-silent |
 | Discovery | `discovery.py` | PARTIAL | Avahi _rtsp._tcp advertisement with TXT records |
-| Health | `health.py` | PARTIAL | Device accessible, ffmpeg alive, server connectivity, watchdog |
+| Health | `health.py` | COMPLETE | CPU temp, memory, uptime, watchdog — injectable thermal path |
 | Pairing | `pairing.py` | STUB | mTLS cert exchange — Phase 2 |
 | OTA agent | `ota_agent.py` | STUB | Update listener — Phase 2 |
 
@@ -156,6 +189,8 @@ We do NOT use `DISTRO = "poky"` (the reference distro). We have our own:
 | 443 | NGINX | Server | HTTPS web dashboard |
 | 5000 | Flask | Server | App (loopback, proxied by NGINX) |
 | 8554 | MediaMTX | Server | RTSP camera stream input |
+| 8889 | MediaMTX | Server | WebRTC WHEP signaling (proxied by NGINX) |
+| 8189/udp | MediaMTX | Server | WebRTC ICE media (direct browser→server) |
 | 22 | SSH | Both | Admin (dev images only) |
 | 80 | Flask | Camera | Setup wizard (first boot only) |
 | 5353 | Avahi | Both | mDNS discovery |
@@ -195,9 +230,9 @@ We do NOT use `DISTRO = "poky"` (the reference distro). We have our own:
 
 ## Tests
 
-- **Server:** 371 tests, 91% coverage (`python -m pytest app/server/tests/ -v`)
-- **Camera:** 38 tests (`python -m pytest app/camera/tests/ -v`)
-- **Total:** 409 tests
+- **Server:** 549 tests, 84.5% coverage (`python -m pytest app/server/tests/ -v`)
+- **Camera:** 255 tests, 70.6% coverage (`python -m pytest app/camera/tests/ -v`)
+- **Total:** 804 tests
 
 ## PR History
 
@@ -269,5 +304,15 @@ Never commit VM credentials to the repo.
 | [docs/testing-guide.md](docs/testing-guide.md) | How to write tests, run tests, measure coverage |
 | [docs/build-setup.md](docs/build-setup.md) | Build machine setup, prerequisites, troubleshooting |
 | [docs/hardware-setup.md](docs/hardware-setup.md) | Shopping list, assembly, flashing, first boot |
+| [docs/adr/](docs/adr/) | Architecture Decision Records (6 ADRs) |
 | [CHANGELOG.md](CHANGELOG.md) | Release notes + detailed setup walkthrough |
 | [README.md](README.md) | Quick start, build targets, doc index |
+
+## Tooling
+
+| Tool | Config | Purpose |
+|------|--------|---------|
+| ruff | `pyproject.toml` | Linting + formatting (replaces flake8/black/isort) |
+| pre-commit | `.pre-commit-config.yaml` | Git hooks: lint, format, trailing whitespace, no main commits |
+| GitHub Actions | `.github/workflows/test.yml` | CI: lint + server tests + camera tests on every push/PR |
+| CODEOWNERS | `.github/CODEOWNERS` | Auto-assign reviewers for PRs |

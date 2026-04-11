@@ -13,9 +13,9 @@ mediamtx receives RTSP pushes from cameras and republishes them
 at rtsp://localhost:8554/<stream-name>. This service pulls from
 mediamtx to create the HLS/recording/snapshot outputs.
 """
+
 import logging
 import os
-import signal
 import subprocess
 import threading
 import time
@@ -25,10 +25,12 @@ from pathlib import Path
 log = logging.getLogger("monitor.streaming")
 
 MEDIAMTX_URL = "rtsp://127.0.0.1:8554"
+RTSP_TIMEOUT_US = "5000000"  # 5s RTSP socket timeout (microseconds)
 SNAPSHOT_INTERVAL = 30  # seconds between snapshot updates
 HLS_SEGMENT_DURATION = 2  # seconds per HLS segment
 HLS_LIST_SIZE = 5  # rolling window of HLS segments
 CLIP_DURATION = 180  # 3-minute clips
+FFMPEG_LOG_DIR = Path("/data/logs/ffmpeg")
 
 
 class StreamingService:
@@ -38,9 +40,9 @@ class StreamingService:
         self._live_dir = Path(live_dir)
         self._recordings_dir = Path(recordings_dir)
         self._clip_duration = clip_duration
-        self._hls_procs = {}       # cam_id -> Popen
-        self._rec_procs = {}       # cam_id -> Popen
-        self._snap_threads = {}    # cam_id -> Thread
+        self._hls_procs = {}  # cam_id -> Popen
+        self._rec_procs = {}  # cam_id -> Popen
+        self._snap_threads = {}  # cam_id -> Thread
         self._running = False
         self._lock = threading.Lock()
 
@@ -50,9 +52,33 @@ class StreamingService:
         with self._lock:
             return list(self._hls_procs.keys())
 
+    @property
+    def recordings_dir(self):
+        """Current recordings directory."""
+        return str(self._recordings_dir)
+
+    def update_recordings_dir(self, new_dir):
+        """Change recordings directory and restart all recorder pipelines.
+
+        Called by StorageManager when switching between internal/USB storage.
+        HLS and snapshot pipelines are unaffected (they use live_dir).
+        """
+        old_dir = str(self._recordings_dir)
+        self._recordings_dir = Path(new_dir)
+        log.info("Recordings dir changed: %s -> %s", old_dir, new_dir)
+
+        # Restart recorders for all active cameras
+        active = self.active_cameras
+        for cam_id in active:
+            self._stop_process(cam_id, self._rec_procs, "recorder")
+            rtsp_url = f"{MEDIAMTX_URL}/{cam_id}"
+            self._start_recorder(cam_id, rtsp_url)
+            log.info("Restarted recorder for %s with new dir", cam_id)
+
     def start(self):
-        """Start the streaming service."""
+        """Start the streaming service and watchdog thread."""
         self._running = True
+        self._start_watchdog()
         log.info("Streaming service started")
 
     def stop(self):
@@ -135,16 +161,28 @@ class StreamingService:
         segment_pattern = str(output_dir / "segment_%03d.ts")
 
         cmd = [
-            "ffmpeg", "-nostdin",
-            "-rtsp_transport", "tcp",
-            "-i", rtsp_url,
-            "-c:v", "copy",
-            "-c:a", "copy",
-            "-f", "hls",
-            "-hls_time", str(HLS_SEGMENT_DURATION),
-            "-hls_list_size", str(HLS_LIST_SIZE),
-            "-hls_flags", "delete_segments+append_list",
-            "-hls_segment_filename", segment_pattern,
+            "ffmpeg",
+            "-nostdin",
+            "-rtsp_transport",
+            "tcp",
+            "-stimeout",
+            RTSP_TIMEOUT_US,
+            "-i",
+            rtsp_url,
+            "-c:v",
+            "copy",
+            "-c:a",
+            "copy",
+            "-f",
+            "hls",
+            "-hls_time",
+            str(HLS_SEGMENT_DURATION),
+            "-hls_list_size",
+            str(HLS_LIST_SIZE),
+            "-hls_flags",
+            "delete_segments+append_list",
+            "-hls_segment_filename",
+            segment_pattern,
             str(playlist),
         ]
 
@@ -174,17 +212,34 @@ class StreamingService:
         self._start_dir_creator(cam_id, cam_rec_dir)
 
         cmd = [
-            "ffmpeg", "-nostdin",
-            "-rtsp_transport", "tcp",
-            "-i", rtsp_url,
-            "-c:v", "copy",
-            "-c:a", "copy",
-            "-f", "segment",
-            "-segment_time", str(self._clip_duration),
-            "-segment_format", "mp4",
-            "-segment_atclocktime", "1",
-            "-strftime", "1",
-            "-reset_timestamps", "1",
+            "ffmpeg",
+            "-nostdin",
+            "-rtsp_transport",
+            "tcp",
+            "-stimeout",
+            RTSP_TIMEOUT_US,
+            "-use_wallclock_as_timestamps",
+            "1",
+            "-i",
+            rtsp_url,
+            "-c:v",
+            "copy",
+            "-c:a",
+            "copy",
+            "-f",
+            "segment",
+            "-segment_time",
+            str(self._clip_duration),
+            "-segment_format",
+            "mp4",
+            "-segment_atclocktime",
+            "1",
+            "-segment_clocktime_wrap_duration",
+            "30",
+            "-strftime",
+            "1",
+            "-reset_timestamps",
+            "1",
             str(cam_rec_dir / "%Y-%m-%d" / "%H-%M-%S.mp4"),
         ]
 
@@ -196,13 +251,16 @@ class StreamingService:
 
     def _start_dir_creator(self, cam_id, rec_dir):
         """Pre-create date directories so ffmpeg segment muxer doesn't fail at midnight."""
+
         def _dir_loop():
             while self._running and cam_id in self._rec_procs:
                 # Create today's and tomorrow's dirs
                 now = datetime.now()
                 today = now.strftime("%Y-%m-%d")
-                tomorrow = (now.replace(hour=0, minute=0, second=0) +
-                           __import__('datetime').timedelta(days=1)).strftime("%Y-%m-%d")
+                tomorrow = (
+                    now.replace(hour=0, minute=0, second=0)
+                    + __import__("datetime").timedelta(days=1)
+                ).strftime("%Y-%m-%d")
                 for d in [today, tomorrow]:
                     (rec_dir / d).mkdir(parents=True, exist_ok=True)
                 # Check every 10 minutes
@@ -214,10 +272,120 @@ class StreamingService:
         t = threading.Thread(target=_dir_loop, daemon=True, name=f"dirs-{cam_id}")
         t.start()
 
+    # --- Process watchdog ---
+
+    WATCHDOG_INTERVAL = 30  # seconds between health checks
+    STALE_CLIP_FACTOR = 2  # restart if newest clip > clip_duration * factor
+
+    def _start_watchdog(self):
+        """Start a watchdog thread that restarts dead ffmpeg processes."""
+
+        def _watchdog_loop():
+            while self._running:
+                self._check_processes()
+                for _ in range(self.WATCHDOG_INTERVAL * 10):
+                    if not self._running:
+                        return
+                    time.sleep(0.1)
+
+        t = threading.Thread(target=_watchdog_loop, daemon=True, name="stream-watchdog")
+        t.start()
+
+    def _check_processes(self):
+        """Check all ffmpeg processes, restart any that have died or stalled."""
+        with self._lock:
+            cam_ids = list(self._hls_procs.keys())
+
+        for cam_id in cam_ids:
+            rtsp_url = f"{MEDIAMTX_URL}/{cam_id}"
+
+            # Check HLS process
+            with self._lock:
+                hls_proc = self._hls_procs.get(cam_id)
+            if hls_proc and hls_proc.poll() is not None:
+                log.warning(
+                    "HLS process died for %s (PID=%d, exit=%s), restarting",
+                    cam_id,
+                    hls_proc.pid,
+                    hls_proc.returncode,
+                )
+                self._close_proc_log(hls_proc)
+                with self._lock:
+                    self._hls_procs.pop(cam_id, None)
+                self._start_hls(cam_id, rtsp_url)
+
+            # Check recorder process — dead or stalled
+            with self._lock:
+                rec_proc = self._rec_procs.get(cam_id)
+            if rec_proc and rec_proc.poll() is not None:
+                log.warning(
+                    "Recorder died for %s (PID=%d, exit=%s), restarting",
+                    cam_id,
+                    rec_proc.pid,
+                    rec_proc.returncode,
+                )
+                self._close_proc_log(rec_proc)
+                with self._lock:
+                    self._rec_procs.pop(cam_id, None)
+                self._start_recorder(cam_id, rtsp_url)
+            elif rec_proc and rec_proc.poll() is None:
+                # Process alive — check if it's actually writing clips
+                if self._is_recorder_stale(cam_id):
+                    log.warning(
+                        "Recorder stalled for %s (no new clips), force-killing PID %d",
+                        cam_id,
+                        rec_proc.pid,
+                    )
+                    self._stop_process(cam_id, self._rec_procs, "stale-rec")
+                    self._start_recorder(cam_id, rtsp_url)
+
+    def _is_recorder_stale(self, cam_id):
+        """Check if recorder is alive but not producing clips.
+
+        Returns True if the newest clip for this camera is older than
+        clip_duration * STALE_CLIP_FACTOR seconds. This catches ffmpeg
+        segment muxer hangs where the process stays alive but stops
+        writing (common on exFAT/NTFS filesystems).
+        """
+        cam_dir = self._recordings_dir / cam_id
+        if not cam_dir.is_dir():
+            return False
+
+        # Find the newest .mp4 file across all date subdirectories
+        newest_mtime = 0
+        try:
+            for mp4 in cam_dir.rglob("*.mp4"):
+                try:
+                    mt = mp4.stat().st_mtime
+                    if mt > newest_mtime:
+                        newest_mtime = mt
+                except OSError:
+                    continue
+        except OSError:
+            return False
+
+        if newest_mtime == 0:
+            # No clips yet — recorder may still be writing the first one.
+            # Give it one full clip duration before declaring stale.
+            return False
+
+        age = time.time() - newest_mtime
+        threshold = self._clip_duration * self.STALE_CLIP_FACTOR
+        if age > threshold:
+            log.debug(
+                "Newest clip for %s is %.0fs old (threshold=%ds)",
+                cam_id,
+                age,
+                threshold,
+            )
+            return True
+        return False
+
     # --- Snapshot extraction ---
 
     def _start_snapshots(self, cam_id, rtsp_url):
         """Start periodic snapshot extraction in a thread."""
+
         def _snap_loop():
             while self._running and cam_id in self._snap_threads:
                 self._take_snapshot(cam_id, rtsp_url)
@@ -238,17 +406,27 @@ class StreamingService:
         tmp = output.with_suffix(".tmp.jpg")
 
         cmd = [
-            "ffmpeg", "-nostdin", "-y",
-            "-rtsp_transport", "tcp",
-            "-i", rtsp_url,
-            "-frames:v", "1",
-            "-q:v", "5",
+            "ffmpeg",
+            "-nostdin",
+            "-y",
+            "-rtsp_transport",
+            "tcp",
+            "-stimeout",
+            RTSP_TIMEOUT_US,
+            "-i",
+            rtsp_url,
+            "-frames:v",
+            "1",
+            "-q:v",
+            "5",
             str(tmp),
         ]
 
         try:
             result = subprocess.run(
-                cmd, capture_output=True, timeout=10,
+                cmd,
+                capture_output=True,
+                timeout=10,
             )
             if result.returncode == 0 and tmp.is_file():
                 # Atomic rename so readers never see a partial file
@@ -265,16 +443,32 @@ class StreamingService:
     # --- Utility ---
 
     def _launch_ffmpeg(self, cmd, label):
-        """Launch an ffmpeg subprocess."""
+        """Launch an ffmpeg subprocess with stderr logged to file.
+
+        Each pipeline gets its own log file under /data/logs/ffmpeg/
+        for post-mortem debugging of crashes and stalls.
+        """
         try:
-            # Ensure output dirs exist (ffmpeg won't create them)
-            # For the segment recorder, we need date-based dirs
+            # Create log directory and open stderr log file
+            stderr_dest = subprocess.PIPE
+            log_file = None
+            try:
+                FFMPEG_LOG_DIR.mkdir(parents=True, exist_ok=True)
+                log_path = FFMPEG_LOG_DIR / f"{label}.log"
+                log_file = open(log_path, "a")
+                stderr_dest = log_file
+                log.debug("ffmpeg stderr → %s", log_path)
+            except OSError:
+                pass  # Fall back to PIPE if log dir isn't writable
+
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
+                stderr=stderr_dest,
                 preexec_fn=os.setsid if hasattr(os, "setsid") else None,
             )
+            # Attach log file handle so we can close it on stop
+            proc._log_file = log_file  # type: ignore[attr-defined]
             return proc
         except FileNotFoundError:
             log.error("ffmpeg not found — cannot start %s", label)
@@ -282,8 +476,18 @@ class StreamingService:
             log.error("Failed to start ffmpeg for %s: %s", label, e)
         return None
 
+    @staticmethod
+    def _close_proc_log(proc):
+        """Close the stderr log file attached to an ffmpeg process."""
+        log_file = getattr(proc, "_log_file", None)
+        if log_file:
+            try:
+                log_file.close()
+            except OSError:
+                pass
+
     def _stop_process(self, cam_id, proc_dict, label):
-        """Stop an ffmpeg process gracefully."""
+        """Stop an ffmpeg process gracefully and close its log file."""
         with self._lock:
             proc = proc_dict.pop(cam_id, None)
         if proc is None:
@@ -296,9 +500,23 @@ class StreamingService:
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait(timeout=2)
-            log.info("%s process stopped for %s", label, cam_id)
+            log.info(
+                "%s process stopped for %s (PID %d, exit=%s)",
+                label,
+                cam_id,
+                proc.pid,
+                proc.returncode,
+            )
         except OSError:
             pass
+        finally:
+            # Close the stderr log file handle
+            log_file = getattr(proc, "_log_file", None)
+            if log_file:
+                try:
+                    log_file.close()
+                except OSError:
+                    pass
 
 
 def create_recording_dirs(recordings_dir, cam_id):

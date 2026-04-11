@@ -217,7 +217,6 @@ class WifiSetupServer:
         return self._cached_networks
 
 
-
 # ============================================================
 # Setup page HTTP handler (first boot — no auth required)
 # ============================================================

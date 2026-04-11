@@ -138,7 +138,9 @@ class TestResolveClipPath:
     """Test resolve_clip_path."""
 
     def test_invalid_filename(self, svc):
-        result, error, status = svc.resolve_clip_path("cam-001", "2026-04-09", "bad.txt")
+        result, error, status = svc.resolve_clip_path(
+            "cam-001", "2026-04-09", "bad.txt"
+        )
         assert error == "Invalid filename"
         assert status == 400
 
@@ -167,9 +169,7 @@ class TestDeleteClip:
         assert status == 400
 
     def test_not_found(self, svc):
-        result, error, status = svc.delete_clip(
-            "cam-001", "2026-04-09", "99-99-99.mp4"
-        )
+        result, error, status = svc.delete_clip("cam-001", "2026-04-09", "99-99-99.mp4")
         assert error == "Clip not found"
         assert status == 404
 
@@ -198,9 +198,7 @@ class TestDeleteClip:
             live_dir=str(tmp_path / "live"),
         )
         _create_clip_file(storage_manager, "cam-001", "2026-04-09", "14-30-00")
-        result, error, status = svc.delete_clip(
-            "cam-001", "2026-04-09", "14-30-00.mp4"
-        )
+        result, error, status = svc.delete_clip("cam-001", "2026-04-09", "14-30-00.mp4")
         assert error is None
         assert status == 200
 

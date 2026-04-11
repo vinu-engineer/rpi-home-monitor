@@ -17,7 +17,7 @@ Features:
 - Auto-reconnect on server disconnect (exponential backoff, max 60s)
 - Health monitoring (check process alive)
 - Graceful shutdown on SIGTERM
-- Phase 2: mTLS client certificate for authentication (RTSPS)
+- mTLS client certificate for authentication (RTSPS) when paired
 """
 
 import logging
@@ -112,6 +112,32 @@ class StreamManager:
                     return
                 time.sleep(0.1)
 
+    @property
+    def _use_mtls(self):
+        """Return True if mTLS certs are available for RTSPS."""
+        return self._config.has_client_cert
+
+    @property
+    def _stream_url(self):
+        """Return RTSPS URL if paired, otherwise plain RTSP."""
+        if self._use_mtls:
+            return self._config.rtsps_url
+        return self._config.rtsp_url
+
+    def _tls_flags(self):
+        """Return ffmpeg TLS flags for mTLS client cert authentication."""
+        if not self._use_mtls:
+            return []
+        certs_dir = self._config.certs_dir
+        return [
+            "-tls_cert",
+            os.path.join(certs_dir, "client.crt"),
+            "-tls_key",
+            os.path.join(certs_dir, "client.key"),
+            "-tls_ca_cert",
+            os.path.join(certs_dir, "ca.crt"),
+        ]
+
     def _has_libcamera(self):
         """Check if libcamera-vid is available."""
         import shutil
@@ -181,7 +207,8 @@ class StreamManager:
             "rtsp",
             "-rtsp_transport",
             "tcp",
-            cfg.rtsp_url,
+            *self._tls_flags(),
+            self._stream_url,
         ]
         return libcamera_cmd, ffmpeg_cmd
 
@@ -207,7 +234,8 @@ class StreamManager:
             "rtsp",
             "-rtsp_transport",
             "tcp",
-            cfg.rtsp_url,
+            *self._tls_flags(),
+            self._stream_url,
         ]
         return cmd
 
@@ -226,7 +254,7 @@ class StreamManager:
             self._config.server_port,
             self._config.camera_id,
         )
-        log.info("RTSP target URL: %s", self._config.rtsp_url)
+        log.info("Stream target URL: %s (mTLS=%s)", self._stream_url, self._use_mtls)
 
         # Check if video device exists before starting
         if not os.path.exists(self._camera_device):

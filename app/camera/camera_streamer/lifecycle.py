@@ -208,6 +208,9 @@ class CameraLifecycle:
 
     def _do_connecting(self):
         """Wait for WiFi connectivity and resolve server address."""
+        # Restore hostname on every boot (transient — lost on reboot)
+        self._restore_hostname()
+
         if not self._wait_for_wifi():
             log.error(
                 "WiFi has no IP after %ds — reverting to setup mode", self.WIFI_TIMEOUT
@@ -337,6 +340,25 @@ class CameraLifecycle:
             log.warning("Hotspot script not found at %s", self.HOTSPOT_SCRIPT)
         except (subprocess.TimeoutExpired, OSError) as e:
             log.warning("Hotspot script error: %s", e)
+
+    def _restore_hostname(self):
+        """Restore hostname from /data/config/hostname on every boot.
+
+        The hostname is set transiently (memory-only) since rootfs is
+        read-only. It was saved to /data during setup.
+        """
+        hostname_file = "/data/config/hostname"
+        try:
+            with open(hostname_file) as f:
+                hostname = f.read().strip()
+            if hostname:
+                from camera_streamer import wifi
+
+                wifi.set_hostname(hostname)
+        except FileNotFoundError:
+            log.debug("No saved hostname at %s", hostname_file)
+        except Exception as e:
+            log.warning("Failed to restore hostname: %s", e)
 
     def _wait_for_wifi(self):
         """Wait for WiFi interface to have an IP address."""

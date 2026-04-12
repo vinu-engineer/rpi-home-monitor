@@ -291,7 +291,12 @@ class ProvisioningService:
             return f"Failed to mark setup complete: {exc}"
 
     def _set_hostname(self, hostname: str):
-        """Set system hostname for mDNS discovery."""
+        """Set system hostname for mDNS discovery.
+
+        Sets both persistent and transient hostname (transient works on
+        read-only rootfs). Also saves to /data/config/hostname so the
+        hostname survives OTA rootfs updates.
+        """
         current = socket.gethostname()
         if current == hostname:
             return
@@ -301,6 +306,13 @@ class ProvisioningService:
                 capture_output=True,
                 timeout=10,
             )
+            # Save to /data for persistence across OTA rootfs updates
+            data_hostname = os.path.join(self._data_dir, "config", "hostname")
+            try:
+                with open(data_hostname, "w") as f:
+                    f.write(hostname + "\n")
+            except OSError:
+                pass
             log.info("Hostname set: %s -> %s", current, hostname)
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
             log.warning("Failed to set hostname: %s", exc)

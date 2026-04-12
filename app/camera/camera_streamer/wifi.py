@@ -8,6 +8,7 @@ for platform abstraction.
 """
 
 import logging
+import os
 import subprocess
 import time
 
@@ -295,14 +296,25 @@ def get_hostname() -> str:
 
 
 def set_hostname(hostname: str) -> bool:
-    """Set the system hostname and notify NetworkManager and Avahi."""
+    """Set the system hostname and notify NetworkManager and Avahi.
+
+    Uses transient hostname (memory-only) so it works on read-only rootfs.
+    The hostname is saved to /data/config/hostname for persistence across
+    reboots — the lifecycle restores it on every boot.
+    """
     try:
+        # Set kernel hostname directly (works on read-only rootfs where
+        # hostnamectl --transient is ignored due to static hostname in /etc)
         subprocess.run(["hostname", hostname], capture_output=True, timeout=5)
-        with open("/etc/hostname", "w") as f:
-            f.write(hostname + "\n")
-        subprocess.run(
-            ["nmcli", "general", "hostname", hostname], capture_output=True, timeout=5
-        )
+        # Save to /data for persistence across reboots
+        data_hostname = "/data/config/hostname"
+        try:
+            os.makedirs(os.path.dirname(data_hostname), exist_ok=True)
+            with open(data_hostname, "w") as f:
+                f.write(hostname + "\n")
+        except OSError:
+            pass
+        # Restart avahi so mDNS advertises the new name
         subprocess.run(
             ["systemctl", "restart", "avahi-daemon"], capture_output=True, timeout=10
         )

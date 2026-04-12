@@ -1,6 +1,5 @@
 """Unit tests for FactoryResetService — wipe data and return to first-boot."""
 
-import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -11,8 +10,16 @@ from monitor.services.factory_reset_service import FactoryResetService
 @pytest.fixture
 def data_dir(tmp_path):
     """Create a realistic /data directory structure."""
-    dirs = ["config", "certs", "certs/cameras", "live", "recordings",
-            "logs", "tailscale", "ota"]
+    dirs = [
+        "config",
+        "certs",
+        "certs/cameras",
+        "live",
+        "recordings",
+        "logs",
+        "tailscale",
+        "ota",
+    ]
     for d in dirs:
         (tmp_path / d).mkdir(parents=True, exist_ok=True)
 
@@ -62,12 +69,16 @@ def svc(store, audit, data_dir):
 class TestFactoryReset:
     """Test the full factory reset flow."""
 
-    @patch("monitor.services.factory_reset_service.FactoryResetService._schedule_restart")
+    @patch(
+        "monitor.services.factory_reset_service.FactoryResetService._schedule_restart"
+    )
     def test_reset_removes_stamp_file(self, mock_restart, svc, data_dir):
         svc.execute_reset()
         assert not (data_dir / ".setup-done").exists()
 
-    @patch("monitor.services.factory_reset_service.FactoryResetService._schedule_restart")
+    @patch(
+        "monitor.services.factory_reset_service.FactoryResetService._schedule_restart"
+    )
     def test_reset_removes_config_files(self, mock_restart, svc, data_dir):
         svc.execute_reset()
         assert not (data_dir / "config" / "cameras.json").exists()
@@ -75,48 +86,68 @@ class TestFactoryReset:
         assert not (data_dir / "config" / "settings.json").exists()
         assert not (data_dir / "config" / ".secret_key").exists()
 
-    @patch("monitor.services.factory_reset_service.FactoryResetService._schedule_restart")
+    @patch(
+        "monitor.services.factory_reset_service.FactoryResetService._schedule_restart"
+    )
     def test_reset_removes_certs(self, mock_restart, svc, data_dir):
         svc.execute_reset()
         assert not (data_dir / "certs").exists()
 
-    @patch("monitor.services.factory_reset_service.FactoryResetService._schedule_restart")
+    @patch(
+        "monitor.services.factory_reset_service.FactoryResetService._schedule_restart"
+    )
     def test_reset_removes_recordings_by_default(self, mock_restart, svc, data_dir):
         svc.execute_reset()
         assert not (data_dir / "recordings").exists()
 
-    @patch("monitor.services.factory_reset_service.FactoryResetService._schedule_restart")
+    @patch(
+        "monitor.services.factory_reset_service.FactoryResetService._schedule_restart"
+    )
     def test_reset_keeps_recordings_when_requested(self, mock_restart, svc, data_dir):
         svc.execute_reset(keep_recordings=True)
-        assert (data_dir / "recordings" / "cam-001" / "2026-04-12" / "14-00-00.mp4").exists()
+        assert (
+            data_dir / "recordings" / "cam-001" / "2026-04-12" / "14-00-00.mp4"
+        ).exists()
 
-    @patch("monitor.services.factory_reset_service.FactoryResetService._schedule_restart")
+    @patch(
+        "monitor.services.factory_reset_service.FactoryResetService._schedule_restart"
+    )
     def test_reset_removes_live_buffer(self, mock_restart, svc, data_dir):
         svc.execute_reset()
         assert not (data_dir / "live").exists()
 
-    @patch("monitor.services.factory_reset_service.FactoryResetService._schedule_restart")
+    @patch(
+        "monitor.services.factory_reset_service.FactoryResetService._schedule_restart"
+    )
     def test_reset_removes_logs(self, mock_restart, svc, data_dir):
         svc.execute_reset()
         assert not (data_dir / "logs").exists()
 
-    @patch("monitor.services.factory_reset_service.FactoryResetService._schedule_restart")
+    @patch(
+        "monitor.services.factory_reset_service.FactoryResetService._schedule_restart"
+    )
     def test_reset_removes_tailscale_state(self, mock_restart, svc, data_dir):
         svc.execute_reset()
         assert not (data_dir / "tailscale").exists()
 
-    @patch("monitor.services.factory_reset_service.FactoryResetService._schedule_restart")
+    @patch(
+        "monitor.services.factory_reset_service.FactoryResetService._schedule_restart"
+    )
     def test_reset_removes_ota_staging(self, mock_restart, svc, data_dir):
         svc.execute_reset()
         assert not (data_dir / "ota").exists()
 
-    @patch("monitor.services.factory_reset_service.FactoryResetService._schedule_restart")
+    @patch(
+        "monitor.services.factory_reset_service.FactoryResetService._schedule_restart"
+    )
     def test_reset_returns_200(self, mock_restart, svc):
         msg, status = svc.execute_reset()
         assert status == 200
         assert "reset" in msg.lower()
 
-    @patch("monitor.services.factory_reset_service.FactoryResetService._schedule_restart")
+    @patch(
+        "monitor.services.factory_reset_service.FactoryResetService._schedule_restart"
+    )
     def test_reset_schedules_restart(self, mock_restart, svc):
         svc.execute_reset()
         mock_restart.assert_called_once()
@@ -125,7 +156,9 @@ class TestFactoryReset:
 class TestAuditLogging:
     """Test that factory reset logs audit events."""
 
-    @patch("monitor.services.factory_reset_service.FactoryResetService._schedule_restart")
+    @patch(
+        "monitor.services.factory_reset_service.FactoryResetService._schedule_restart"
+    )
     def test_audit_logged_before_wipe(self, mock_restart, svc, audit):
         svc.execute_reset(requesting_user="admin", requesting_ip="10.0.0.1")
         audit.log_event.assert_called_once()
@@ -134,19 +167,25 @@ class TestAuditLogging:
         assert call_args[1]["user"] == "admin"
         assert call_args[1]["ip"] == "10.0.0.1"
 
-    @patch("monitor.services.factory_reset_service.FactoryResetService._schedule_restart")
+    @patch(
+        "monitor.services.factory_reset_service.FactoryResetService._schedule_restart"
+    )
     def test_audit_includes_keep_recordings_flag(self, mock_restart, svc, audit):
         svc.execute_reset(keep_recordings=True)
         detail = audit.log_event.call_args[1]["detail"]
         assert "keep_recordings=True" in detail
 
-    @patch("monitor.services.factory_reset_service.FactoryResetService._schedule_restart")
+    @patch(
+        "monitor.services.factory_reset_service.FactoryResetService._schedule_restart"
+    )
     def test_no_audit_service_does_not_raise(self, mock_restart, store, data_dir):
         svc = FactoryResetService(store, None, str(data_dir))
         msg, status = svc.execute_reset()
         assert status == 200
 
-    @patch("monitor.services.factory_reset_service.FactoryResetService._schedule_restart")
+    @patch(
+        "monitor.services.factory_reset_service.FactoryResetService._schedule_restart"
+    )
     def test_audit_failure_does_not_break_reset(self, mock_restart, store, data_dir):
         audit = MagicMock()
         audit.log_event.side_effect = RuntimeError("audit db down")
@@ -158,21 +197,27 @@ class TestAuditLogging:
 class TestEdgeCases:
     """Test factory reset with missing or already-clean state."""
 
-    @patch("monitor.services.factory_reset_service.FactoryResetService._schedule_restart")
+    @patch(
+        "monitor.services.factory_reset_service.FactoryResetService._schedule_restart"
+    )
     def test_reset_on_empty_data_dir(self, mock_restart, store, audit, tmp_path):
         """Reset works even if /data is empty (fresh state)."""
         svc = FactoryResetService(store, audit, str(tmp_path))
         msg, status = svc.execute_reset()
         assert status == 200
 
-    @patch("monitor.services.factory_reset_service.FactoryResetService._schedule_restart")
+    @patch(
+        "monitor.services.factory_reset_service.FactoryResetService._schedule_restart"
+    )
     def test_reset_idempotent(self, mock_restart, svc, data_dir):
         """Running reset twice doesn't fail."""
         svc.execute_reset()
         msg, status = svc.execute_reset()
         assert status == 200
 
-    @patch("monitor.services.factory_reset_service.FactoryResetService._schedule_restart")
+    @patch(
+        "monitor.services.factory_reset_service.FactoryResetService._schedule_restart"
+    )
     def test_config_dir_preserved(self, mock_restart, svc, data_dir):
         """Config directory itself is not removed (only its contents)."""
         svc.execute_reset()

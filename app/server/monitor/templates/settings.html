@@ -10,6 +10,7 @@
 <div class="settings-tabs" x-show="isAdmin">
     <button class="settings-tab" :class="{ active: tab === 'system' }" @click="tab = 'system'">System</button>
     <button class="settings-tab" :class="{ active: tab === 'network' }" @click="tab = 'network'">Network</button>
+    <button class="settings-tab" :class="{ active: tab === 'tailscale' }" @click="tab = 'tailscale'">Tailscale</button>
     <button class="settings-tab" :class="{ active: tab === 'users' }" @click="tab = 'users'">Users</button>
     <button class="settings-tab" :class="{ active: tab === 'storage' }" @click="tab = 'storage'">Storage</button>
 </div>
@@ -159,16 +160,41 @@
         </div>
     </div>
 
-    <!-- Tailscale VPN -->
-    <div class="settings-section">
-        <div class="settings-section__title">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px; margin-right:6px;">
-                <rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/>
-            </svg>
-            Remote Access (Tailscale)
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     TAILSCALE TAB (admin only)
+     ═══════════════════════════════════════════════════════════ -->
+<div x-show="isAdmin && tab === 'tailscale'" x-cloak>
+
+    <!-- First-time Setup Guide -->
+    <template x-if="tailscale.installed && !tailscale.authenticated && tailscale.state !== 'connected'">
+        <div class="ts-setup-guide">
+            <div class="ts-setup-guide__title">Get Started with Remote Access</div>
+            <div class="ts-setup-guide__step">
+                <span class="ts-setup-guide__num">1</span>
+                <span>Create a free account at <a href="https://tailscale.com" target="_blank" rel="noopener" style="color:var(--color-info);">tailscale.com</a> if you don't have one</span>
+            </div>
+            <div class="ts-setup-guide__step">
+                <span class="ts-setup-guide__num">2</span>
+                <span>Click <strong>Connect</strong> below — you'll get a login URL</span>
+            </div>
+            <div class="ts-setup-guide__step">
+                <span class="ts-setup-guide__num">3</span>
+                <span>Open the URL on any device, approve the server, and you're done</span>
+            </div>
+            <div class="ts-setup-guide__step">
+                <span class="ts-setup-guide__num">4</span>
+                <span>Or paste a <strong>pre-auth key</strong> below for headless setup (no browser needed)</span>
+            </div>
         </div>
+    </template>
+
+    <!-- Status -->
+    <div class="settings-section">
+        <div class="settings-section__title">Status</div>
         <div class="card">
-            <!-- Status Row -->
             <div class="info-row">
                 <span class="info-row__label">Status</span>
                 <span class="info-row__value">
@@ -189,6 +215,10 @@
                     </template>
                 </span>
             </div>
+            <div class="info-row">
+                <span class="info-row__label">Daemon</span>
+                <span class="info-row__value" x-text="tailscale.daemon_enabled ? 'Enabled' : 'Disabled'"></span>
+            </div>
 
             <!-- Connected Info -->
             <template x-if="tailscale.state === 'connected'">
@@ -205,8 +235,6 @@
                         <span class="info-row__label">Peers Online</span>
                         <span class="info-row__value" x-text="tailscale.peers.filter(p => p.online).length + ' / ' + tailscale.peers.length"></span>
                     </div>
-
-                    <!-- Peer List -->
                     <template x-if="tailscale.peers.length > 0">
                         <div class="ts-peers">
                             <div class="ts-peers__title">Connected Devices</div>
@@ -224,12 +252,22 @@
                 </div>
             </template>
 
-            <!-- Auth URL (when needs-login) -->
+            <!-- Auth URL (auto-polls until approved) -->
             <template x-if="tailscale.authUrl">
                 <div class="ts-auth-box">
                     <p class="ts-auth-box__label">Open this URL to authenticate:</p>
                     <a :href="tailscale.authUrl" target="_blank" rel="noopener" class="ts-auth-box__url" x-text="tailscale.authUrl"></a>
-                    <button class="btn btn--secondary btn--small mt-8" @click="navigator.clipboard.writeText(tailscale.authUrl); window.HM.toast('Copied to clipboard', 'success')">Copy URL</button>
+                    <div style="display:flex; gap:8px; margin-top:8px; align-items:center;">
+                        <button class="btn btn--secondary btn--small" @click="navigator.clipboard.writeText(tailscale.authUrl); window.HM.toast('Copied to clipboard', 'success')">Copy URL</button>
+                        <span class="text-small text-muted">Waiting for approval...</span>
+                    </div>
+                </div>
+            </template>
+
+            <!-- Not installed message -->
+            <template x-if="!tailscale.installed">
+                <div class="text-muted text-small mt-8">
+                    Tailscale is not installed. It is included in the system image — reflash to enable.
                 </div>
             </template>
 
@@ -237,7 +275,7 @@
             <div class="ts-actions" x-show="tailscale.installed">
                 <template x-if="tailscale.state !== 'connected'">
                     <button class="btn btn--primary btn--small" @click="tsConnect()" :disabled="tailscale.loading">
-                        <span x-text="tailscale.loading ? 'Connecting...' : 'Enable Tailscale'"></span>
+                        <span x-text="tailscale.loading ? 'Connecting...' : 'Connect'"></span>
                     </button>
                 </template>
                 <template x-if="tailscale.state === 'connected'">
@@ -246,16 +284,74 @@
                     </button>
                 </template>
                 <button class="btn btn--secondary btn--small" @click="loadTailscale()" :disabled="tailscale.loading" style="margin-left:8px;">
-                    Refresh Status
+                    Refresh
                 </button>
             </div>
+        </div>
+    </div>
 
-            <!-- Not installed message -->
-            <template x-if="!tailscale.installed">
-                <div class="text-muted text-small mt-8">
-                    Tailscale is not installed. It is included in the system image — reflash to enable remote access.
+    <!-- Configuration -->
+    <div class="settings-section" x-show="tailscale.installed">
+        <div class="settings-section__title">Configuration</div>
+        <div class="card">
+            <div class="ts-toggle-row">
+                <div>
+                    <div class="ts-toggle-row__label">Enable Tailscale</div>
+                    <div class="ts-toggle-row__hint">Start the Tailscale daemon on this device</div>
                 </div>
-            </template>
+                <label class="toggle">
+                    <input type="checkbox" x-model="tailscale.config.enabled">
+                    <span class="toggle__slider"></span>
+                </label>
+            </div>
+            <div class="ts-toggle-row" x-show="tailscale.config.enabled">
+                <div>
+                    <div class="ts-toggle-row__label">Auto-connect on boot</div>
+                    <div class="ts-toggle-row__hint">Automatically run 'tailscale up' when the server starts</div>
+                </div>
+                <label class="toggle">
+                    <input type="checkbox" x-model="tailscale.config.auto_connect">
+                    <span class="toggle__slider"></span>
+                </label>
+            </div>
+            <div class="ts-toggle-row" x-show="tailscale.config.enabled">
+                <div>
+                    <div class="ts-toggle-row__label">Accept routes</div>
+                    <div class="ts-toggle-row__hint">Accept subnet routes advertised by other nodes</div>
+                </div>
+                <label class="toggle">
+                    <input type="checkbox" x-model="tailscale.config.accept_routes">
+                    <span class="toggle__slider"></span>
+                </label>
+            </div>
+            <div class="ts-toggle-row" x-show="tailscale.config.enabled">
+                <div>
+                    <div class="ts-toggle-row__label">Tailscale SSH</div>
+                    <div class="ts-toggle-row__hint">Allow SSH access through Tailscale (no port forwarding needed)</div>
+                </div>
+                <label class="toggle">
+                    <input type="checkbox" x-model="tailscale.config.ssh">
+                    <span class="toggle__slider"></span>
+                </label>
+            </div>
+            <div class="ts-toggle-row" x-show="tailscale.config.enabled" style="border-bottom:none;">
+                <div style="flex:1;">
+                    <div class="ts-toggle-row__label">Pre-auth Key</div>
+                    <div class="ts-toggle-row__hint">
+                        For headless setup — generate at
+                        <a href="https://login.tailscale.com/admin/settings/keys" target="_blank" rel="noopener" style="color:var(--color-info);">Tailscale admin</a>.
+                        <template x-if="tailscale.config.has_auth_key">
+                            <span style="color:var(--color-success);"> Key saved.</span>
+                        </template>
+                    </div>
+                    <input type="password" class="form-input mt-8" placeholder="tskey-auth-..." x-model="tailscale.authKey" style="max-width:400px;">
+                </div>
+            </div>
+            <div style="margin-top:var(--space-3); display:flex; gap:8px;">
+                <button class="btn btn--primary btn--small" @click="saveTailscaleConfig()" :disabled="tailscale.loading">
+                    <span x-text="tailscale.loading ? 'Saving...' : 'Save & Apply'"></span>
+                </button>
+            </div>
         </div>
     </div>
 </div>
@@ -503,7 +599,7 @@ function settingsPage() {
 
         wifi: { currentSsid: '', networks: [], selectedSsid: '', password: '', scanning: false },
 
-        tailscale: { installed: false, running: false, state: 'unavailable', hostname: '', ip: '', peers: [], authUrl: '', loading: false },
+        tailscale: { installed: false, running: false, state: 'unavailable', hostname: '', ip: '', peers: [], authUrl: '', loading: false, daemon_enabled: false, authenticated: false, config: { enabled: false, auto_connect: false, accept_routes: false, ssh: false, has_auth_key: false }, authKey: '', pollTimer: null },
 
         storage: { location: '', recSize: '', space: '', clips: '', isUsb: false, devices: [], scanned: false, scanning: false, showFormat: false, formatDevice: {}, formatting: false },
 
@@ -661,13 +757,41 @@ function settingsPage() {
         async loadTailscale() {
             try {
                 var data = await window.HM.api.get('/api/v1/system/tailscale');
+                var wasWaiting = !!this.tailscale.authUrl;
                 this.tailscale.installed = data.installed;
                 this.tailscale.running = data.running;
                 this.tailscale.state = data.state;
                 this.tailscale.hostname = data.hostname;
                 this.tailscale.ip = data.tailscale_ip;
                 this.tailscale.peers = data.peers || [];
+                this.tailscale.daemon_enabled = data.daemon_enabled || false;
+                this.tailscale.authenticated = data.authenticated || false;
+                if (data.config) {
+                    this.tailscale.config.enabled = data.config.enabled;
+                    this.tailscale.config.auto_connect = data.config.auto_connect;
+                    this.tailscale.config.accept_routes = data.config.accept_routes;
+                    this.tailscale.config.ssh = data.config.ssh;
+                    this.tailscale.config.has_auth_key = data.config.has_auth_key;
+                }
+                // Auto-detect approval: if we were waiting for auth and now connected
+                if (wasWaiting && data.state === 'connected') {
+                    this.tailscale.authUrl = '';
+                    this.tsStopPoll();
+                    window.HM.toast('Tailscale authenticated and connected!', 'success');
+                }
             } catch(e) {}
+        },
+
+        tsStartPoll() {
+            this.tsStopPoll();
+            this.tailscale.pollTimer = setInterval(() => this.loadTailscale(), 5000);
+        },
+
+        tsStopPoll() {
+            if (this.tailscale.pollTimer) {
+                clearInterval(this.tailscale.pollTimer);
+                this.tailscale.pollTimer = null;
+            }
         },
 
         async tsConnect() {
@@ -678,6 +802,7 @@ function settingsPage() {
                 if (data.auth_url) {
                     this.tailscale.authUrl = data.auth_url;
                     this.tailscale.state = 'needs-login';
+                    this.tsStartPoll();
                     window.HM.toast('Authentication required — see URL below', 'info');
                 } else {
                     window.HM.toast('Tailscale connected', 'success');
@@ -694,8 +819,39 @@ function settingsPage() {
                 await window.HM.api.post('/api/v1/system/tailscale/disconnect', {});
                 window.HM.toast('Tailscale disconnected', 'success');
                 this.tailscale.authUrl = '';
+                this.tsStopPoll();
                 await this.loadTailscale();
             } catch(e) { window.HM.toast(e.message || 'Disconnect failed', 'error'); }
+            this.tailscale.loading = false;
+        },
+
+        async saveTailscaleConfig() {
+            this.tailscale.loading = true;
+            try {
+                var payload = {
+                    tailscale_enabled: this.tailscale.config.enabled,
+                    tailscale_auto_connect: this.tailscale.config.auto_connect,
+                    tailscale_accept_routes: this.tailscale.config.accept_routes,
+                    tailscale_ssh: this.tailscale.config.ssh,
+                };
+                // Only send auth key if user entered a new one
+                if (this.tailscale.authKey) {
+                    payload.tailscale_auth_key = this.tailscale.authKey;
+                }
+                await window.HM.api.put('/api/v1/settings', payload);
+
+                // Apply config immediately
+                var data = await window.HM.api.post('/api/v1/system/tailscale/apply-config', {});
+                if (data.auth_url) {
+                    this.tailscale.authUrl = data.auth_url;
+                    this.tsStartPoll();
+                    window.HM.toast('Config saved — authentication required', 'info');
+                } else {
+                    window.HM.toast('Tailscale config saved and applied', 'success');
+                }
+                this.tailscale.authKey = '';
+                await this.loadTailscale();
+            } catch(e) { window.HM.toast(e.message || 'Failed to save config', 'error'); }
             this.tailscale.loading = false;
         },
 

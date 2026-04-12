@@ -209,7 +209,7 @@ def _init_services(app):
     )
 
     # Tailscale service — VPN status and management
-    app.tailscale_service = TailscaleService(audit=app.audit)
+    app.tailscale_service = TailscaleService(store=app.store, audit=app.audit)
 
     # Factory reset service — wipe all data and return to first-boot
     app.factory_reset_service = FactoryResetService(
@@ -265,6 +265,20 @@ def _startup(app):
 
     # Resume pipelines for confirmed online cameras
     _resume_camera_pipelines(app)
+
+    # Apply Tailscale config on boot (auto-connect if configured)
+    try:
+        settings = app.store.get_settings()
+        if settings.tailscale_enabled:
+            auth_url, err = app.tailscale_service.apply_config()
+            if err:
+                log.warning("Tailscale startup config failed: %s", err)
+            elif auth_url:
+                log.info("Tailscale needs authentication: %s", auth_url)
+            else:
+                log.info("Tailscale config applied on startup")
+    except Exception as exc:
+        log.warning("Failed to apply Tailscale config on startup: %s", exc)
 
 
 def _auto_mount_usb(app, default_recordings_dir):

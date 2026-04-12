@@ -728,9 +728,21 @@ class TestTailscaleStatusContract:
         data = resp.get_json()
         _assert_has_fields(
             data,
-            {"installed", "running", "state", "hostname", "tailscale_ip", "peers"},
+            {
+                "installed",
+                "running",
+                "state",
+                "hostname",
+                "tailscale_ip",
+                "peers",
+                "config",
+            },
         )
         assert isinstance(data["peers"], list)
+        _assert_has_fields(
+            data["config"],
+            {"enabled", "auto_connect", "accept_routes", "ssh", "has_auth_key"},
+        )
 
     def test_requires_auth(self, client):
         resp = client.get("/api/v1/system/tailscale")
@@ -760,6 +772,45 @@ class TestTailscaleDisconnectContract:
 
     def test_requires_auth(self, client):
         resp = client.post("/api/v1/system/tailscale/disconnect")
+        assert resp.status_code == 401
+
+
+class TestTailscaleEnableContract:
+    """POST /api/v1/system/tailscale/enable."""
+
+    def test_requires_admin(self, app, client):
+        _login(app, client, role="viewer")
+        resp = client.post("/api/v1/system/tailscale/enable")
+        assert resp.status_code == 403
+
+    def test_requires_auth(self, client):
+        resp = client.post("/api/v1/system/tailscale/enable")
+        assert resp.status_code == 401
+
+
+class TestTailscaleDisableContract:
+    """POST /api/v1/system/tailscale/disable."""
+
+    def test_requires_admin(self, app, client):
+        _login(app, client, role="viewer")
+        resp = client.post("/api/v1/system/tailscale/disable")
+        assert resp.status_code == 403
+
+    def test_requires_auth(self, client):
+        resp = client.post("/api/v1/system/tailscale/disable")
+        assert resp.status_code == 401
+
+
+class TestTailscaleApplyConfigContract:
+    """POST /api/v1/system/tailscale/apply-config."""
+
+    def test_requires_admin(self, app, client):
+        _login(app, client, role="viewer")
+        resp = client.post("/api/v1/system/tailscale/apply-config")
+        assert resp.status_code == 403
+
+    def test_requires_auth(self, client):
+        resp = client.post("/api/v1/system/tailscale/apply-config")
         assert resp.status_code == 401
 
 

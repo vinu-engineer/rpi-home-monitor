@@ -1,11 +1,11 @@
 """
 Tailscale VPN management service.
 
-Wraps the tailscale CLI to provide status, connect/disconnect, and
-auth URL retrieval for the web dashboard settings page.
+Wraps the tailscale CLI to provide status, connect/disconnect,
+enable/disable daemon, and config-driven auto-connect.
 
 Design patterns:
-- Constructor Injection (audit)
+- Constructor Injection (store, audit)
 - Single Responsibility (Tailscale lifecycle only)
 - Fail-Silent (CLI failures return error tuples, never crash)
 """
@@ -24,13 +24,15 @@ CONNECT_TIMEOUT = 30
 
 
 class TailscaleService:
-    """Manages Tailscale VPN status and connection.
+    """Manages Tailscale VPN status, connection, and daemon lifecycle.
 
     Args:
+        store: Store instance for reading persisted settings (optional).
         audit: AuditLogger instance (optional).
     """
 
-    def __init__(self, audit=None):
+    def __init__(self, store=None, audit=None):
+        self._store = store
         self._audit = audit
 
     def get_status(self):
@@ -45,6 +47,8 @@ class TailscaleService:
                 tailscale_ip (str): Tailscale IP address (if connected).
                 exit_node (bool): Whether acting as exit node.
                 peers (list[dict]): Connected peers [{name, ip, online}].
+                daemon_enabled (bool): Whether systemd service is enabled.
+                authenticated (bool): Has auth history (not first-time).
         """
         result = {
             "installed": False,
@@ -54,12 +58,17 @@ class TailscaleService:
             "tailscale_ip": "",
             "exit_node": False,
             "peers": [],
+            "daemon_enabled": False,
+            "authenticated": False,
         }
 
         # Check if binary exists
         if not self._binary_exists():
             return result
         result["installed"] = True
+
+        # Check if systemd service is enabled
+        result["daemon_enabled"] = self._is_daemon_enabled()
 
         # Get JSON status from tailscale
         status_data, err = self._run_json(["tailscale", "status", "--json"])
@@ -79,10 +88,15 @@ class TailscaleService:
         backend_state = status_data.get("BackendState", "")
         if backend_state == "Running":
             result["state"] = "connected"
+            result["authenticated"] = True
         elif backend_state == "NeedsLogin":
             result["state"] = "needs-login"
         elif backend_state == "Stopped":
             result["state"] = "stopped"
+            # If there's a Self node with a hostname, user has authenticated before
+            self_node = status_data.get("Self", {})
+            if self_node.get("UserID", 0) > 0:
+                result["authenticated"] = True
         else:
             result["state"] = backend_state.lower() if backend_state else "unknown"
 
@@ -109,19 +123,31 @@ class TailscaleService:
 
         return result
 
-    def connect(self):
+    def connect(self, accept_routes=False, ssh=False, authkey=""):
         """Start Tailscale and return auth URL if login is needed.
+
+        Args:
+            accept_routes: Pass --accept-routes flag.
+            ssh: Pass --ssh flag.
+            authkey: Pre-auth key for headless setup.
 
         Returns:
             (auth_url_or_none, error) tuple.
-            auth_url is a string URL if login is needed, None if already connected.
         """
         if not self._binary_exists():
             return None, "Tailscale is not installed"
 
+        cmd = ["tailscale", "up"]
+        if accept_routes:
+            cmd.append("--accept-routes")
+        if ssh:
+            cmd.append("--ssh")
+        if authkey:
+            cmd.append(f"--authkey={authkey}")
+
         try:
             proc = subprocess.run(
-                ["tailscale", "up"],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=CONNECT_TIMEOUT,
@@ -174,6 +200,102 @@ class TailscaleService:
         except OSError as e:
             return False, str(e)
 
+    def enable(self):
+        """Enable and start the tailscaled systemd service.
+
+        Returns:
+            (success, error) tuple.
+        """
+        try:
+            result = subprocess.run(
+                ["systemctl", "enable", "--now", "tailscaled"],
+                capture_output=True,
+                text=True,
+                timeout=CLI_TIMEOUT,
+            )
+            if result.returncode == 0:
+                self._log_audit("TAILSCALE_ENABLED", "Daemon enabled and started")
+                return True, ""
+            return False, result.stderr.strip() or "Failed to enable tailscaled"
+        except FileNotFoundError:
+            return False, "systemctl not found"
+        except subprocess.TimeoutExpired:
+            return False, "Enable timed out"
+        except OSError as e:
+            return False, str(e)
+
+    def disable(self):
+        """Gracefully disconnect, then disable and stop the tailscaled service.
+
+        Returns:
+            (success, error) tuple.
+        """
+        # Graceful disconnect first (ignore errors — may already be down)
+        if self._binary_exists():
+            try:
+                subprocess.run(
+                    ["tailscale", "down"],
+                    capture_output=True,
+                    text=True,
+                    timeout=CLI_TIMEOUT,
+                )
+            except (subprocess.TimeoutExpired, OSError):
+                pass
+
+        try:
+            result = subprocess.run(
+                ["systemctl", "disable", "--now", "tailscaled"],
+                capture_output=True,
+                text=True,
+                timeout=CLI_TIMEOUT,
+            )
+            if result.returncode == 0:
+                self._log_audit("TAILSCALE_DISABLED", "Daemon disabled and stopped")
+                return True, ""
+            return False, result.stderr.strip() or "Failed to disable tailscaled"
+        except FileNotFoundError:
+            return False, "systemctl not found"
+        except subprocess.TimeoutExpired:
+            return False, "Disable timed out"
+        except OSError as e:
+            return False, str(e)
+
+    def apply_config(self):
+        """Apply persisted Tailscale settings from the store.
+
+        Reads tailscale_enabled, tailscale_auto_connect, and flags
+        from settings, then enables/disables daemon and optionally
+        runs 'tailscale up' with the appropriate flags.
+
+        Returns:
+            (auth_url_or_none, error) tuple.
+        """
+        if not self._store:
+            return None, "No store configured"
+
+        settings = self._store.get_settings()
+
+        if not settings.tailscale_enabled:
+            ok, err = self.disable()
+            if not ok:
+                log.warning("Failed to disable Tailscale: %s", err)
+            return None, ""
+
+        # Ensure daemon is running
+        ok, err = self.enable()
+        if not ok:
+            return None, f"Failed to enable daemon: {err}"
+
+        if not settings.tailscale_auto_connect:
+            return None, ""
+
+        # Connect with saved flags
+        return self.connect(
+            accept_routes=settings.tailscale_accept_routes,
+            ssh=settings.tailscale_ssh,
+            authkey=settings.tailscale_auth_key,
+        )
+
     def _binary_exists(self):
         """Check if tailscale binary is available."""
         try:
@@ -183,6 +305,19 @@ class TailscaleService:
                 timeout=5,
             )
             return True
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            return False
+
+    def _is_daemon_enabled(self):
+        """Check if tailscaled systemd service is enabled."""
+        try:
+            result = subprocess.run(
+                ["systemctl", "is-enabled", "tailscaled"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            return result.stdout.strip() == "enabled"
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
             return False
 

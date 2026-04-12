@@ -16,6 +16,11 @@ def _make_settings(**overrides):
         "hostname": "homemonitor",
         "setup_completed": False,
         "firmware_version": "1.0.0",
+        "tailscale_enabled": False,
+        "tailscale_auto_connect": False,
+        "tailscale_accept_routes": False,
+        "tailscale_ssh": False,
+        "tailscale_auth_key": "",
     }
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
@@ -49,7 +54,7 @@ class TestGetSettings:
         svc, _ = _make_service()
         result = svc.get_settings()
         assert isinstance(result, dict)
-        assert len(result) == 7
+        assert len(result) == 12
 
     def test_reflects_custom_values(self):
         settings = _make_settings(timezone="US/Pacific", hostname="mybox")
@@ -601,6 +606,11 @@ class TestUpdatableFields:
             "clip_duration_seconds",
             "session_timeout_minutes",
             "hostname",
+            "tailscale_enabled",
+            "tailscale_auto_connect",
+            "tailscale_accept_routes",
+            "tailscale_ssh",
+            "tailscale_auth_key",
         }
         assert expected == UPDATABLE_FIELDS
 

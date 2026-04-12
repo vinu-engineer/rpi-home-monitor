@@ -155,5 +155,3 @@ Contributions are welcome. Please read the [Development Guide](docs/development-
 ## License
 
 This project is licensed under **AGPL-3.0** — see [LICENSE](LICENSE) for details.
-
-Commercial licensing is available for organizations that want to use RPi Home Monitor in proprietary products without the AGPL obligations. Contact the maintainer for details.

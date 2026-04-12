@@ -84,7 +84,7 @@ class TestSettings:
         d = asdict(Settings())
         assert d["timezone"] == "Europe/Dublin"
         assert isinstance(d, dict)
-        assert len(d) == 9  # 7 original + usb_device + usb_recordings_dir
+        assert len(d) == 14  # 9 base + 5 tailscale fields
 
 
 class TestClip:

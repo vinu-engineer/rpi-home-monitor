@@ -22,6 +22,7 @@ from monitor.services.settings_service import SettingsService
 from monitor.services.storage_manager import StorageManager
 from monitor.services.storage_service import StorageService
 from monitor.services.streaming_service import StreamingService
+from monitor.services.tailscale_service import TailscaleService
 from monitor.services.user_service import UserService
 from monitor.store import Store
 
@@ -200,6 +201,9 @@ def _init_services(app):
         certs_dir=app.config["CERTS_DIR"],
         audit=app.audit,
     )
+
+    # Tailscale service — VPN status and management
+    app.tailscale_service = TailscaleService(audit=app.audit)
 
     # Connect storage manager → streaming service for dir change notifications
     def _on_recording_dir_change(new_dir):

@@ -64,6 +64,12 @@ class Settings:
     # USB storage — set when user selects a USB device for recordings
     usb_device: str = ""  # e.g. /dev/sda1 (empty = internal)
     usb_recordings_dir: str = ""  # e.g. /mnt/recordings/home-monitor-recordings
+    # Tailscale VPN configuration
+    tailscale_enabled: bool = False  # enable/disable tailscaled daemon
+    tailscale_auto_connect: bool = False  # auto-run 'tailscale up' on boot
+    tailscale_accept_routes: bool = False  # --accept-routes flag
+    tailscale_ssh: bool = False  # --ssh flag for Tailscale SSH
+    tailscale_auth_key: str = ""  # pre-auth key for headless setup
 
 
 @dataclass

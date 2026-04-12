@@ -22,6 +22,11 @@ UPDATABLE_FIELDS = {
     "clip_duration_seconds",
     "session_timeout_minutes",
     "hostname",
+    "tailscale_enabled",
+    "tailscale_auto_connect",
+    "tailscale_accept_routes",
+    "tailscale_ssh",
+    "tailscale_auth_key",
 }
 
 
@@ -43,6 +48,11 @@ class SettingsService:
             "hostname": settings.hostname,
             "setup_completed": settings.setup_completed,
             "firmware_version": settings.firmware_version,
+            "tailscale_enabled": settings.tailscale_enabled,
+            "tailscale_auto_connect": settings.tailscale_auto_connect,
+            "tailscale_accept_routes": settings.tailscale_accept_routes,
+            "tailscale_ssh": settings.tailscale_ssh,
+            "tailscale_has_auth_key": bool(settings.tailscale_auth_key),
         }
 
     def update_settings(
@@ -234,6 +244,22 @@ class SettingsService:
                 errors.append(
                     "timezone must be a valid timezone string (e.g., Europe/Dublin)"
                 )
+
+        for field in (
+            "tailscale_enabled",
+            "tailscale_auto_connect",
+            "tailscale_accept_routes",
+            "tailscale_ssh",
+        ):
+            if field in data and not isinstance(data[field], bool):
+                errors.append(f"{field} must be a boolean")
+
+        if "tailscale_auth_key" in data:
+            val = data["tailscale_auth_key"]
+            if not isinstance(val, str):
+                errors.append("tailscale_auth_key must be a string")
+            elif len(val) > 256:
+                errors.append("tailscale_auth_key must be at most 256 characters")
 
         return errors
 

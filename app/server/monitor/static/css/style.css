@@ -691,6 +691,52 @@ select.form-input {
     border-top: 1px solid var(--color-border);
 }
 
+/* Tailscale config toggles */
+.ts-toggle-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--space-2) 0;
+    border-bottom: 1px solid var(--color-border);
+}
+.ts-toggle-row:last-child { border-bottom: none; }
+.ts-toggle-row__label { font-size: var(--text-base); font-weight: 500; }
+.ts-toggle-row__hint { font-size: var(--text-sm); color: var(--color-text-muted); margin-top: 2px; }
+
+/* Toggle switch component */
+.toggle { position: relative; display: inline-block; width: 44px; height: 24px; flex-shrink: 0; }
+.toggle input { opacity: 0; width: 0; height: 0; }
+.toggle__slider {
+    position: absolute; cursor: pointer; inset: 0;
+    background: #555; border-radius: 24px; transition: background 0.2s;
+}
+.toggle__slider::before {
+    content: ""; position: absolute; height: 18px; width: 18px;
+    left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: transform 0.2s;
+}
+.toggle input:checked + .toggle__slider { background: var(--color-info); }
+.toggle input:checked + .toggle__slider::before { transform: translateX(20px); }
+
+/* First-time setup guide */
+.ts-setup-guide {
+    padding: var(--space-3);
+    background: rgba(52, 152, 219, 0.08);
+    border: 1px solid var(--color-info);
+    border-radius: var(--radius-sm);
+    margin-bottom: var(--space-3);
+}
+.ts-setup-guide__title { font-weight: 600; margin-bottom: var(--space-2); }
+.ts-setup-guide__step {
+    display: flex; gap: var(--space-2); align-items: flex-start;
+    margin-bottom: var(--space-2); font-size: var(--text-sm);
+}
+.ts-setup-guide__step:last-child { margin-bottom: 0; }
+.ts-setup-guide__num {
+    background: var(--color-info); color: #fff; min-width: 20px; height: 20px;
+    border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    font-size: 0.75rem; flex-shrink: 0;
+}
+
 /* --- USB Device Item --- */
 .usb-device-item {
     padding: 10px;

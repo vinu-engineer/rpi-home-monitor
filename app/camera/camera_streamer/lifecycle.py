@@ -150,6 +150,10 @@ class CameraLifecycle:
             return True
 
         log.info("First boot — starting setup wizard")
+
+        # Start WiFi hotspot for setup (AP mode so user can connect)
+        self._start_hotspot()
+
         self._setup_server.start()
 
         while not self._is_shutdown() and self._setup_server.needs_setup():
@@ -179,6 +183,9 @@ class CameraLifecycle:
         log.info("Camera not paired — starting status server for /pair endpoint")
         led.setup_mode()
 
+        # Register with server so it appears in the dashboard
+        self._register_with_server()
+
         # Start status server so /pair endpoint is accessible
         self._status_server = CameraStatusServer(
             self._config,
@@ -204,6 +211,9 @@ class CameraLifecycle:
 
     def _do_connecting(self):
         """Wait for WiFi connectivity and resolve server address."""
+        # Restore hostname on every boot (transient — lost on reboot)
+        self._restore_hostname()
+
         if not self._wait_for_wifi():
             log.error(
                 "WiFi has no IP after %ds — reverting to setup mode", self.WIFI_TIMEOUT
@@ -288,6 +298,95 @@ class CameraLifecycle:
         return True
 
     # ---- Helper methods ----
+
+    def _register_with_server(self):
+        """Register this camera with the server as pending.
+
+        Sends camera ID and IP so it appears in the server dashboard
+        before pairing is complete. Best-effort — pairing still works
+        if this fails (admin can add camera manually).
+        """
+        if not self._config.is_configured:
+            return
+        server = self._config.server_ip
+        camera_id = self._config.camera_id
+        url = f"http://{server}:5000/api/v1/pair/register"
+        try:
+            import json
+            import urllib.request
+
+            data = json.dumps({"camera_id": camera_id}).encode()
+            req = urllib.request.Request(
+                url, data=data, headers={"Content-Type": "application/json"}
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                log.info("Registered with server as pending (status=%d)", resp.status)
+        except Exception as e:
+            log.debug("Server registration failed (will retry via mDNS): %s", e)
+
+    HOTSPOT_SCRIPT = "/opt/camera/scripts/camera-hotspot.sh"
+
+    def _start_hotspot(self):
+        """Start WiFi hotspot for setup mode if not already running.
+
+        On Yocto images, camera-hotspot.service starts the hotspot
+        via systemd before camera-streamer. This method checks if
+        the hotspot is already active and only starts it if needed.
+        Uses the same shell script as the systemd service (ADR-0013).
+        """
+        # Check if hotspot is already running (started by systemd)
+        try:
+            result = subprocess.run(
+                [self.HOTSPOT_SCRIPT, "status"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0:
+                log.info("Hotspot already active (started by systemd)")
+                return
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            pass
+
+        # Hotspot not running — start it
+        try:
+            result = subprocess.run(
+                [self.HOTSPOT_SCRIPT, "start"],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            if result.returncode == 0:
+                log.info("Hotspot started via script")
+            else:
+                log.warning(
+                    "Hotspot script failed (rc=%d): %s",
+                    result.returncode,
+                    result.stderr.strip() or result.stdout.strip(),
+                )
+        except FileNotFoundError:
+            log.warning("Hotspot script not found at %s", self.HOTSPOT_SCRIPT)
+        except (subprocess.TimeoutExpired, OSError) as e:
+            log.warning("Hotspot script error: %s", e)
+
+    def _restore_hostname(self):
+        """Restore hostname from /data/config/hostname on every boot.
+
+        The hostname is set transiently (memory-only) since rootfs is
+        read-only. It was saved to /data during setup.
+        """
+        hostname_file = "/data/config/hostname"
+        try:
+            with open(hostname_file) as f:
+                hostname = f.read().strip()
+            if hostname:
+                from camera_streamer import wifi
+
+                wifi.set_hostname(hostname)
+        except FileNotFoundError:
+            log.debug("No saved hostname at %s", hostname_file)
+        except Exception as e:
+            log.warning("Failed to restore hostname: %s", e)
 
     def _wait_for_wifi(self):
         """Wait for WiFi interface to have an IP address."""

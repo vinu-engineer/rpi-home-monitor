@@ -1,14 +1,12 @@
 """
-Factory reset service — wipes all user data and returns to first-boot state.
+Factory reset service for camera — wipes config and returns to first-boot state.
 
-Single responsibility: clear configuration, certificates, recordings, and
-logs. After reset, the server restarts and presents the setup wizard.
+Mirrors the server's FactoryResetService pattern (ADR-0013):
+- Constructor injection (config, data_dir)
+- WiFi credentials wiped via hotspot script's 'wipe' command
+- System reboot after reset (systemd re-evaluates ConditionPathExists)
 
-Design:
-- Constructor injection (store, audit, data_dir)
-- Audit log written BEFORE data is wiped (so the event is captured)
-- Subprocess call for service restart (systemd)
-- Does NOT reformat the /data partition — just clears contents
+After reset: camera-hotspot.service starts (no .setup-done) → setup wizard.
 """
 
 import logging
@@ -17,80 +15,52 @@ import shutil
 import subprocess
 import threading
 
-log = logging.getLogger("monitor.services.factory_reset")
+log = logging.getLogger("camera-streamer.factory-reset")
+
+HOTSPOT_SCRIPT = "/opt/camera/scripts/camera-hotspot.sh"
 
 
 class FactoryResetService:
-    """Wipes all user data and restarts the server in first-boot state."""
+    """Wipes camera data and restarts in first-boot state."""
 
-    def __init__(self, store, audit, data_dir: str = "/data"):
-        self._store = store
-        self._audit = audit
+    def __init__(
+        self, config, data_dir: str = "/data", hotspot_script: str = HOTSPOT_SCRIPT
+    ):
+        self._config = config
         self._data_dir = data_dir
+        self._hotspot_script = hotspot_script
 
-    def execute_reset(
-        self,
-        keep_recordings: bool = False,
-        requesting_user: str = "",
-        requesting_ip: str = "",
-    ) -> tuple[str, int]:
+    def execute_reset(self) -> tuple[str, int]:
         """Perform factory reset.
 
-        Clears all config, certs, and optionally recordings.
-        Schedules a service restart after a short delay.
+        Clears config, certs, logs. Wipes WiFi credentials.
+        Schedules system reboot.
 
         Returns (message, status_code).
         """
-        # Log BEFORE wiping (so the audit event is captured)
-        self._log_audit(
-            "FACTORY_RESET",
-            requesting_user=requesting_user,
-            requesting_ip=requesting_ip,
-            detail=f"keep_recordings={keep_recordings}",
-        )
-
         errors = []
 
         # 1. Remove setup-done stamp (re-enables provisioning wizard)
         stamp = os.path.join(self._data_dir, ".setup-done")
         self._safe_remove(stamp, errors)
 
-        # 2. Clear config files (users, cameras, settings, secret key)
-        config_dir = os.path.join(self._data_dir, "config")
-        for filename in [
-            "cameras.json",
-            "users.json",
-            "settings.json",
-            ".secret_key",
-        ]:
-            self._safe_remove(os.path.join(config_dir, filename), errors)
+        # 2. Remove config file
+        config_path = os.path.join(self._data_dir, "config", "camera.conf")
+        self._safe_remove(config_path, errors)
 
-        # 3. Clear certificates (server certs regenerated on boot)
+        # 3. Remove certificates (pairing data)
         certs_dir = os.path.join(self._data_dir, "certs")
         self._safe_rmtree(certs_dir, errors)
 
-        # 4. Clear live streaming buffer
-        live_dir = os.path.join(self._data_dir, "live")
-        self._safe_rmtree(live_dir, errors)
-
-        # 5. Optionally clear recordings
-        if not keep_recordings:
-            recordings_dir = os.path.join(self._data_dir, "recordings")
-            self._safe_rmtree(recordings_dir, errors)
-
-        # 6. Clear logs (audit log already has the reset event)
+        # 4. Remove logs
         logs_dir = os.path.join(self._data_dir, "logs")
         self._safe_rmtree(logs_dir, errors)
 
-        # 7. Clear Tailscale state
-        ts_dir = os.path.join(self._data_dir, "tailscale")
-        self._safe_rmtree(ts_dir, errors)
-
-        # 8. Clear OTA staging area
+        # 5. Remove OTA staging
         ota_dir = os.path.join(self._data_dir, "ota")
         self._safe_rmtree(ota_dir, errors)
 
-        # 9. Clear WiFi credentials via hotspot script (ADR-0013)
+        # 6. Clear WiFi credentials via hotspot script (ADR-0013)
         self._clear_wifi(errors)
 
         if errors:
@@ -98,8 +68,8 @@ class FactoryResetService:
         else:
             log.info("Factory reset completed successfully")
 
-        # Schedule service restart (give time for HTTP response)
-        self._schedule_restart()
+        # Schedule system reboot (full reboot ensures clean first-boot state)
+        self._schedule_reboot()
 
         return "Factory reset complete. Restarting...", 200
 
@@ -132,11 +102,10 @@ class FactoryResetService:
         system-connections/ on every boot, so it must be wiped too.
         """
         # 1. Run hotspot script wipe (handles nmcli + /etc cleanup)
-        hotspot_script = self._find_hotspot_script()
-        if hotspot_script:
-            try:
+        try:
+            if os.path.isfile(self._hotspot_script):
                 result = subprocess.run(
-                    [hotspot_script, "wipe"],
+                    [self._hotspot_script, "wipe"],
                     capture_output=True,
                     text=True,
                     timeout=15,
@@ -147,12 +116,15 @@ class FactoryResetService:
                     )
                     errors.append(f"wifi: {result.stderr.strip()}")
                 else:
-                    log.debug("WiFi credentials wiped via %s", hotspot_script)
-            except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
-                log.warning("Failed to wipe WiFi credentials: %s", exc)
-                errors.append(f"wifi: {exc}")
-        else:
-            log.warning("Hotspot script not found — skipping script wipe")
+                    log.debug("WiFi credentials wiped via hotspot script")
+            else:
+                log.debug(
+                    "Hotspot script not found at %s — skipping script wipe",
+                    self._hotspot_script,
+                )
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+            log.warning("Failed to wipe WiFi credentials: %s", exc)
+            errors.append(f"wifi: {exc}")
 
         # 2. Always wipe /data/network/system-connections/ directly
         #    (nm-persist.sh restores connections from here on every boot)
@@ -185,27 +157,15 @@ class FactoryResetService:
                 log.warning("Failed to remove %s: %s", fpath, exc)
                 errors.append(f"{label}: {exc}")
 
-    @staticmethod
-    def _find_hotspot_script() -> str | None:
-        """Locate the hotspot management script for this device."""
-        candidates = [
-            "/opt/monitor/scripts/monitor-hotspot.sh",
-            "/opt/camera/scripts/camera-hotspot.sh",
-        ]
-        for path in candidates:
-            if os.path.isfile(path):
-                return path
-        return None
-
-    def _schedule_restart(self):
+    def _schedule_reboot(self):
         """Reboot the system after a 2-second delay.
 
         A full reboot (not just service restart) is required so that
-        the monitor-hotspot.service ConditionPathExists check re-evaluates
+        camera-hotspot.service ConditionPathExists re-evaluates
         and starts the WiFi hotspot for first-boot setup.
         """
 
-        def _do_restart():
+        def _do_reboot():
             log.info("Rebooting system for factory reset...")
             try:
                 subprocess.run(
@@ -216,20 +176,6 @@ class FactoryResetService:
             except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
                 log.error("System reboot failed: %s", exc)
 
-        timer = threading.Timer(2.0, _do_restart)
+        timer = threading.Timer(2.0, _do_reboot)
         timer.daemon = True
         timer.start()
-
-    def _log_audit(self, event, requesting_user="", requesting_ip="", detail=""):
-        """Write audit event, fail-silent."""
-        if not self._audit:
-            return
-        try:
-            self._audit.log_event(
-                event,
-                user=requesting_user,
-                ip=requesting_ip,
-                detail=detail,
-            )
-        except Exception:
-            pass

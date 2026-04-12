@@ -183,13 +183,22 @@ Before any Yocto change is committed:
   ```
   app/camera/camera_streamer/
     main.py              ← Entry point
+    lifecycle.py         ← State machine (INIT→SETUP→PAIRING→...→RUNNING)
     config.py            ← Config + PBKDF2 password management
     capture.py           ← V4L2 camera detection
-    stream.py            ← FFmpeg RTSP streaming
-    wifi_setup.py        ← Setup wizard + status server + sessions
+    stream.py            ← FFmpeg RTSPS streaming
+    wifi_setup.py        ← First-boot WiFi hotspot + setup wizard
+    wifi.py              ← WiFi connection management
+    status_server.py     ← Post-setup status/admin server
     discovery.py         ← Avahi mDNS advertisement
+    pairing.py           ← PIN-based cert exchange with server
+    ota_agent.py         ← OTA update listener (port 8080, mTLS)
+    factory_reset.py     ← WiFi wipe + config reset
+    encryption.py        ← LUKS key derivation
     health.py            ← CPU/RAM/uptime monitoring
     led.py               ← ACT LED patterns
+    platform.py          ← Hardware path abstraction
+    logging_config.py    ← Logging setup
     templates/           ← HTML templates (login, setup, status)
   ```
 
@@ -409,7 +418,7 @@ Every PR must satisfy the appropriate layers:
 **Why smoke tests (Layer 5)?** Unit/integration tests use mocks. Smoke tests hit a real RPi with real HTTPS, real disk, real systemd services. Run after deploying to hardware:
 
 ```bash
-./scripts/smoke-test.sh 192.168.8.245 12345678
+./scripts/smoke-test.sh <server-ip> <password>
 ```
 
 #### Key Rules (non-negotiable)

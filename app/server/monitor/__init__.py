@@ -7,6 +7,8 @@ records video clips, and provides a mobile-friendly web dashboard.
 
 import logging
 import os
+import socket
+import subprocess
 
 from flask import Flask
 
@@ -223,8 +225,32 @@ def _init_services(app):
     app.storage_manager.set_dir_change_callback(_on_recording_dir_change)
 
 
+def _restore_hostname(data_dir: str):
+    """Restore hostname from /data on every boot.
+
+    Hostname is saved during provisioning. Restoring it on startup
+    ensures it survives OTA rootfs updates (even if rootfs is read-only).
+    """
+    hostname_file = os.path.join(data_dir, "config", "hostname")
+    try:
+        with open(hostname_file) as f:
+            hostname = f.read().strip()
+        if hostname and hostname != socket.gethostname():
+            subprocess.run(
+                ["hostnamectl", "set-hostname", hostname],
+                capture_output=True,
+                timeout=10,
+            )
+            log.info("Hostname restored: %s", hostname)
+    except FileNotFoundError:
+        pass
+    except Exception as exc:
+        log.warning("Failed to restore hostname: %s", exc)
+
+
 def _startup(app):
     """Runtime startup: default admin, USB auto-mount, start services."""
+    _restore_hostname(app.config.get("DATA_DIR", "/data"))
     _ensure_default_admin(app.store)
     log.debug("Default admin user ensured")
 

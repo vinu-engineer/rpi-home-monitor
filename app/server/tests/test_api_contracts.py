@@ -658,6 +658,55 @@ class TestOtaStatusContract:
 
 
 # ===========================================================================
+# Tailscale contracts (/api/v1/system/tailscale*)
+# ===========================================================================
+
+
+class TestTailscaleStatusContract:
+    """GET /api/v1/system/tailscale."""
+
+    def test_fields(self, app, client):
+        _login(app, client)
+        resp = client.get("/api/v1/system/tailscale")
+        data = resp.get_json()
+        _assert_has_fields(
+            data,
+            {"installed", "running", "state", "hostname", "tailscale_ip", "peers"},
+        )
+        assert isinstance(data["peers"], list)
+
+    def test_requires_auth(self, client):
+        resp = client.get("/api/v1/system/tailscale")
+        assert resp.status_code == 401
+
+
+class TestTailscaleConnectContract:
+    """POST /api/v1/system/tailscale/connect."""
+
+    def test_requires_admin(self, app, client):
+        _login(app, client, role="viewer")
+        resp = client.post("/api/v1/system/tailscale/connect")
+        assert resp.status_code == 403
+
+    def test_requires_auth(self, client):
+        resp = client.post("/api/v1/system/tailscale/connect")
+        assert resp.status_code == 401
+
+
+class TestTailscaleDisconnectContract:
+    """POST /api/v1/system/tailscale/disconnect."""
+
+    def test_requires_admin(self, app, client):
+        _login(app, client, role="viewer")
+        resp = client.post("/api/v1/system/tailscale/disconnect")
+        assert resp.status_code == 403
+
+    def test_requires_auth(self, client):
+        resp = client.post("/api/v1/system/tailscale/disconnect")
+        assert resp.status_code == 401
+
+
+# ===========================================================================
 # Error response contracts (consistency check)
 # ===========================================================================
 

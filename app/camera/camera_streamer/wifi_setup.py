@@ -384,10 +384,10 @@ def _make_handler(config, setup_server):
             self.wfile.write(body)
 
         def _serve_setup_page(self):
-            html = _load_template("setup.html").replace(
-                "{{CAMERA_ID}}", config.camera_id
-            ).replace(
-                "{{HOSTNAME}}", setup_server._expected_hostname or ""
+            html = (
+                _load_template("setup.html")
+                .replace("{{CAMERA_ID}}", config.camera_id)
+                .replace("{{HOSTNAME}}", setup_server._expected_hostname or "")
             )
             body = html.encode()
             self.send_response(200)

@@ -17,6 +17,13 @@ IMAGE_INSTALL += " \
     packagegroup-monitor-security \
     "
 
+# --- OTA update engine (ADR-0008) ---
+IMAGE_INSTALL += " \
+    swupdate \
+    swupdate-progress \
+    u-boot-fw-utils \
+    "
+
 # --- Storage & filesystem tools ---
 IMAGE_INSTALL += " \
     e2fsprogs \

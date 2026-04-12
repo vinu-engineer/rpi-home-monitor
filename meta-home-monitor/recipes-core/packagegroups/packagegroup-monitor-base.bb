@@ -13,6 +13,7 @@ RDEPENDS:${PN} = " \
     dnsmasq \
     avahi-daemon \
     tzdata \
+    tailscale \
     htop \
     nano \
     curl \

@@ -16,6 +16,13 @@ IMAGE_INSTALL += " \
     packagegroup-monitor-security \
     "
 
+# --- OTA update engine (ADR-0008) ---
+IMAGE_INSTALL += " \
+    swupdate \
+    swupdate-progress \
+    u-boot-fw-utils \
+    "
+
 # --- Python for camera streamer app ---
 IMAGE_INSTALL += " \
     python3 \

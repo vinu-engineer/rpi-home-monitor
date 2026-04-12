@@ -27,7 +27,8 @@ PrivateTmp=true
 # Camera device access
 SupplementaryGroups=video
 # Hotspot setup needs NetworkManager D-Bus access and port 80
-AmbientCapabilities=CAP_NET_BIND_SERVICE
+# CAP_SYS_ADMIN needed to set hostname (mDNS) on read-only rootfs
+AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_SYS_ADMIN
 
 [Install]
 WantedBy=multi-user.target

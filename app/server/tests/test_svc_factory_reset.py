@@ -1,5 +1,6 @@
 """Unit tests for FactoryResetService — wipe data and return to first-boot."""
 
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -222,3 +223,37 @@ class TestEdgeCases:
         """Config directory itself is not removed (only its contents)."""
         svc.execute_reset()
         assert (data_dir / "config").exists()
+
+
+class TestWifiClear:
+    """Test that factory reset clears WiFi credentials."""
+
+    @patch(
+        "monitor.services.factory_reset_service.FactoryResetService._schedule_restart"
+    )
+    @patch("monitor.services.factory_reset_service.os.remove")
+    @patch("monitor.services.factory_reset_service.os.listdir")
+    @patch("monitor.services.factory_reset_service.os.path.isdir")
+    def test_reset_clears_nm_connections(
+        self, mock_isdir, mock_listdir, mock_remove, mock_restart, svc, data_dir
+    ):
+        """NM saved connections are deleted during reset."""
+        original_isdir = os.path.isdir
+
+        def isdir_side_effect(path):
+            if path == "/etc/NetworkManager/system-connections":
+                return True
+            return original_isdir(path)
+
+        mock_isdir.side_effect = isdir_side_effect
+        mock_listdir.return_value = ["MyWiFi.nmconnection", "Work.nmconnection"]
+        svc.execute_reset()
+        assert mock_remove.call_count >= 2
+
+    @patch(
+        "monitor.services.factory_reset_service.FactoryResetService._schedule_restart"
+    )
+    def test_reset_succeeds_without_nm_dir(self, mock_restart, svc):
+        """Reset doesn't fail if NM dir doesn't exist."""
+        msg, status = svc.execute_reset()
+        assert status == 200

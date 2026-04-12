@@ -585,6 +585,30 @@ def _make_status_handler(
             except OSError as e:
                 errors.append(str(e))
 
+            # Clear WiFi credentials (NetworkManager saved connections)
+            nm_dir = "/etc/NetworkManager/system-connections"
+            try:
+                if os.path.isdir(nm_dir):
+                    for f in os.listdir(nm_dir):
+                        filepath = os.path.join(nm_dir, f)
+                        if os.path.isfile(filepath):
+                            os.remove(filepath)
+            except OSError as e:
+                errors.append(str(e))
+
+            # Reset wpa_supplicant.conf
+            try:
+                wpa_conf = "/etc/wpa_supplicant.conf"
+                if os.path.exists(wpa_conf):
+                    with open(wpa_conf, "w") as fh:
+                        fh.write(
+                            "ctrl_interface=/var/run/wpa_supplicant\n"
+                            "ctrl_interface_group=0\n"
+                            "update_config=1\n"
+                        )
+            except OSError as e:
+                errors.append(str(e))
+
             if errors:
                 log.warning("Factory reset completed with errors: %s", errors)
             else:
@@ -592,16 +616,16 @@ def _make_status_handler(
 
             self._json_response({"message": "Factory reset complete. Restarting..."})
 
-            # Schedule service restart
+            # Schedule system reboot (full reboot ensures clean first-boot state)
             def _restart():
                 try:
                     subprocess.run(
-                        ["systemctl", "restart", "camera-streamer"],
+                        ["systemctl", "reboot"],
                         capture_output=True,
                         timeout=30,
                     )
                 except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
-                    log.error("Restart failed: %s", e)
+                    log.error("Reboot failed: %s", e)
 
             timer = threading.Timer(2.0, _restart)
             timer.daemon = True

@@ -42,6 +42,7 @@ clone_layer() {
 clone_layer "https://git.yoctoproject.org/poky" "$YOCTO_DIR/poky" "$RELEASE"
 clone_layer "https://git.yoctoproject.org/meta-raspberrypi" "$YOCTO_DIR/meta-raspberrypi" "$RELEASE"
 clone_layer "https://github.com/openembedded/meta-openembedded.git" "$YOCTO_DIR/meta-openembedded" "$RELEASE"
+clone_layer "https://github.com/sbabic/meta-swupdate.git" "$YOCTO_DIR/meta-swupdate" "$RELEASE"
 
 build_image() {
     local board=$1 builddir=$2 configdir=$3 image=$4
